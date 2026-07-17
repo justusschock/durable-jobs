@@ -102,6 +102,41 @@ func Run(t *testing.T, factory func(t *testing.T) jobs.Store) {
 		}
 	})
 
+	t.Run("heartbeat deadline never moves backward", func(t *testing.T) {
+		store := factory(t)
+		create(t, store, newJob("heartbeat-order", "queue", now(0)))
+		attempt := claimOne(t, store, "queue", now(1), 7)
+		if err := store.Heartbeat(context.Background(), jobs.HeartbeatRequest{
+			AttemptID: attempt.ID, FencingToken: 7, Deadline: now(4),
+		}); err != nil {
+			t.Fatalf("Heartbeat() with later deadline error = %v", err)
+		}
+		before := get(t, store, "heartbeat-order")
+		if err := store.Heartbeat(context.Background(), jobs.HeartbeatRequest{
+			AttemptID: attempt.ID, FencingToken: 7, Deadline: now(4),
+		}); err != nil {
+			t.Fatalf("Heartbeat() with same deadline error = %v", err)
+		}
+		if got := get(t, store, "heartbeat-order"); !sameJob(got, before) {
+			t.Fatalf("Heartbeat() with same deadline changed job: got %#v, want %#v", got, before)
+		}
+		if err := store.Heartbeat(context.Background(), jobs.HeartbeatRequest{
+			AttemptID: attempt.ID, FencingToken: 7, Deadline: now(3),
+		}); !errors.Is(err, jobs.ErrInvalidTransition) {
+			t.Fatalf("Heartbeat() with earlier deadline error = %v, want ErrInvalidTransition", err)
+		}
+		if got := get(t, store, "heartbeat-order"); !sameJob(got, before) {
+			t.Fatalf("Heartbeat() with earlier deadline changed job: got %#v, want %#v", got, before)
+		}
+		candidates, err := store.ListRecoveryCandidates(context.Background(), now(5), 1)
+		if err != nil {
+			t.Fatalf("ListRecoveryCandidates() error = %v", err)
+		}
+		if len(candidates) != 1 || !candidates[0].Attempt.HeartbeatDeadline.Equal(now(4)) {
+			t.Fatalf("ListRecoveryCandidates() = %#v, want deadline %v", candidates, now(4))
+		}
+	})
+
 	t.Run("complete is terminal", func(t *testing.T) {
 		store := factory(t)
 		create(t, store, newJob("complete", "queue", now(0)))
@@ -204,15 +239,86 @@ func Run(t *testing.T, factory func(t *testing.T) jobs.Store) {
 		if got := get(t, store, "expired"); string(got.Payload) != "payload" {
 			t.Fatalf("ListRecoveryCandidates() returned aliased job payload: %#v", got)
 		}
-		recovered, err := store.RecoverAttempt(context.Background(), attempt.ID, now(3))
+		recovered, err := store.RecoverAttempt(context.Background(), jobs.RecoverAttemptRequest{
+			AttemptID: attempt.ID, FencingToken: 1,
+			HeartbeatDeadline: candidates[0].Attempt.HeartbeatDeadline,
+			RecoveredAt:       now(3),
+		})
 		if err != nil {
 			t.Fatalf("RecoverAttempt() error = %v", err)
 		}
 		if recovered.State != jobs.StatePending || !recovered.AvailableAt.Equal(now(3)) {
 			t.Fatalf("RecoverAttempt() = %#v, want pending job", recovered)
 		}
-		if _, err := store.RecoverAttempt(context.Background(), attempt.ID, now(4)); !errors.Is(err, jobs.ErrInvalidTransition) {
+		if _, err := store.RecoverAttempt(context.Background(), jobs.RecoverAttemptRequest{
+			AttemptID: attempt.ID, FencingToken: 1,
+			HeartbeatDeadline: candidates[0].Attempt.HeartbeatDeadline,
+			RecoveredAt:       now(4),
+		}); !errors.Is(err, jobs.ErrInvalidTransition) {
 			t.Fatalf("second RecoverAttempt() error = %v, want ErrInvalidTransition", err)
+		}
+	})
+
+	t.Run("recovery before expiry", func(t *testing.T) {
+		store := factory(t)
+		create(t, store, newJob("recover-early", "queue", now(0)))
+		attempt := claimOne(t, store, "queue", now(1), 7)
+		before := get(t, store, "recover-early")
+		if _, err := store.RecoverAttempt(context.Background(), jobs.RecoverAttemptRequest{
+			AttemptID: attempt.ID, FencingToken: 7,
+			HeartbeatDeadline: attempt.HeartbeatDeadline,
+			RecoveredAt:       now(1),
+		}); !errors.Is(err, jobs.ErrInvalidTransition) {
+			t.Fatalf("RecoverAttempt() before expiry error = %v, want ErrInvalidTransition", err)
+		}
+		if got := get(t, store, "recover-early"); !sameJob(got, before) {
+			t.Fatalf("RecoverAttempt() before expiry changed job: got %#v, want %#v", got, before)
+		}
+	})
+
+	t.Run("recovery requires current fence", func(t *testing.T) {
+		store := factory(t)
+		create(t, store, newJob("recover-fence", "queue", now(0)))
+		attempt := claimOne(t, store, "queue", now(1), 7)
+		before := get(t, store, "recover-fence")
+		if _, err := store.RecoverAttempt(context.Background(), jobs.RecoverAttemptRequest{
+			AttemptID: attempt.ID, FencingToken: 6,
+			HeartbeatDeadline: attempt.HeartbeatDeadline,
+			RecoveredAt:       now(3),
+		}); !errors.Is(err, jobs.ErrStaleAttempt) {
+			t.Fatalf("RecoverAttempt() with stale fence error = %v, want ErrStaleAttempt", err)
+		}
+		if got := get(t, store, "recover-fence"); !sameJob(got, before) {
+			t.Fatalf("RecoverAttempt() with stale fence changed job: got %#v, want %#v", got, before)
+		}
+	})
+
+	t.Run("heartbeat invalidates listed recovery", func(t *testing.T) {
+		store := factory(t)
+		create(t, store, newJob("recover-heartbeat", "queue", now(0)))
+		attempt := claimOne(t, store, "queue", now(1), 7)
+		candidates, err := store.ListRecoveryCandidates(context.Background(), now(3), 1)
+		if err != nil {
+			t.Fatalf("ListRecoveryCandidates() error = %v", err)
+		}
+		if len(candidates) != 1 || candidates[0].Attempt.ID != attempt.ID {
+			t.Fatalf("ListRecoveryCandidates() = %#v, want listed attempt", candidates)
+		}
+		if err := store.Heartbeat(context.Background(), jobs.HeartbeatRequest{
+			AttemptID: attempt.ID, FencingToken: 7, Deadline: now(4),
+		}); err != nil {
+			t.Fatalf("Heartbeat() error = %v", err)
+		}
+		before := get(t, store, "recover-heartbeat")
+		if _, err := store.RecoverAttempt(context.Background(), jobs.RecoverAttemptRequest{
+			AttemptID: attempt.ID, FencingToken: 7,
+			HeartbeatDeadline: candidates[0].Attempt.HeartbeatDeadline,
+			RecoveredAt:       now(5),
+		}); !errors.Is(err, jobs.ErrStaleAttempt) {
+			t.Fatalf("RecoverAttempt() after heartbeat error = %v, want ErrStaleAttempt", err)
+		}
+		if got := get(t, store, "recover-heartbeat"); !sameJob(got, before) {
+			t.Fatalf("RecoverAttempt() after heartbeat changed job: got %#v, want %#v", got, before)
 		}
 	})
 
