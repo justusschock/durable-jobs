@@ -137,6 +137,53 @@ func Run(t *testing.T, factory func(t *testing.T) jobs.Store) {
 		}
 	})
 
+	t.Run("updated at never moves backward", func(t *testing.T) {
+		store := factory(t)
+		create(t, store, newJob("updated-at", "queue", now(0)))
+		attempt := claimOne(t, store, "queue", now(1), 7)
+		if attempt.Job.State != jobs.StateRunning || !attempt.Job.UpdatedAt.Equal(now(1)) {
+			t.Fatalf("ClaimReady() job = %#v, want running with UpdatedAt %v", attempt.Job, now(1))
+		}
+
+		requested, err := store.RequestCancel(context.Background(), "updated-at", now(10))
+		if err != nil {
+			t.Fatalf("RequestCancel() error = %v", err)
+		}
+		if requested.State != jobs.StateRunning || !requested.CancellationRequested || !requested.UpdatedAt.Equal(now(10)) {
+			t.Fatalf("RequestCancel() = %#v, want cancellation-requested running job with UpdatedAt %v", requested, now(10))
+		}
+
+		if err := store.Heartbeat(context.Background(), jobs.HeartbeatRequest{
+			AttemptID: attempt.ID, FencingToken: 7, Deadline: now(3),
+		}); err != nil {
+			t.Fatalf("Heartbeat() error = %v", err)
+		}
+		heartbeated := get(t, store, "updated-at")
+		if heartbeated.State != jobs.StateRunning || !heartbeated.CancellationRequested || !heartbeated.UpdatedAt.Equal(now(10)) {
+			t.Errorf("Heartbeat() job = %#v, want cancellation-requested running job with UpdatedAt %v", heartbeated, now(10))
+		}
+
+		candidates, err := store.ListRecoveryCandidates(context.Background(), now(4), 1)
+		if err != nil {
+			t.Fatalf("ListRecoveryCandidates() error = %v", err)
+		}
+		if len(candidates) != 1 || candidates[0].Attempt.ID != attempt.ID || !candidates[0].Attempt.HeartbeatDeadline.Equal(now(3)) {
+			t.Fatalf("ListRecoveryCandidates() = %#v, want current attempt with deadline %v", candidates, now(3))
+		}
+		recovered, err := store.RecoverAttempt(context.Background(), jobs.RecoverAttemptRequest{
+			AttemptID:         attempt.ID,
+			FencingToken:      7,
+			HeartbeatDeadline: candidates[0].Attempt.HeartbeatDeadline,
+			RecoveredAt:       now(4),
+		})
+		if err != nil {
+			t.Fatalf("RecoverAttempt() error = %v", err)
+		}
+		if recovered.State != jobs.StateCanceled || !recovered.CancellationRequested || !recovered.UpdatedAt.Equal(now(10)) {
+			t.Errorf("RecoverAttempt() = %#v, want canceled job with UpdatedAt %v", recovered, now(10))
+		}
+	})
+
 	t.Run("complete is terminal", func(t *testing.T) {
 		store := factory(t)
 		create(t, store, newJob("complete", "queue", now(0)))
