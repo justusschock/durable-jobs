@@ -123,6 +123,12 @@ func (store *Store) Heartbeat(ctx context.Context, request jobs.HeartbeatRequest
 		return err
 	}
 	deadline := persistedTime(request.Deadline)
+	if deadline.Equal(attempt.HeartbeatDeadline) {
+		return nil
+	}
+	if deadline.Before(attempt.HeartbeatDeadline) {
+		return jobs.ErrInvalidTransition
+	}
 	attempt.HeartbeatDeadline = deadline
 	job.UpdatedAt = deadline
 	store.attempts[attempt.ID] = cloneAttempt(attempt)
@@ -211,8 +217,8 @@ func (store *Store) RequestCancel(ctx context.Context, id jobs.JobID, requestedA
 	return cloneJob(job), nil
 }
 
-// RecoverAttempt returns a running attempt's job to pending state.
-func (store *Store) RecoverAttempt(ctx context.Context, id jobs.AttemptID, recoveredAt time.Time) (jobs.Job, error) {
+// RecoverAttempt returns a currently fenced, expired attempt's job to pending state.
+func (store *Store) RecoverAttempt(ctx context.Context, request jobs.RecoverAttemptRequest) (jobs.Job, error) {
 	if err := ctx.Err(); err != nil {
 		return jobs.Job{}, err
 	}
@@ -221,49 +227,36 @@ func (store *Store) RecoverAttempt(ctx context.Context, id jobs.AttemptID, recov
 	if err := ctx.Err(); err != nil {
 		return jobs.Job{}, err
 	}
-	return store.recoverAttempt(id, persistedTime(recoveredAt))
-}
-
-// RecoverExpired recovers up to limit attempts whose deadlines have expired.
-func (store *Store) RecoverExpired(ctx context.Context, observedAt time.Time, limit int) ([]jobs.Job, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	attempt, exists := store.attempts[request.AttemptID]
+	if !exists {
+		return jobs.Job{}, jobs.ErrStaleAttempt
 	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	job, exists := store.jobs[attempt.Job.ID]
+	if !exists {
+		return jobs.Job{}, jobs.ErrJobNotFound
 	}
-	if limit <= 0 {
-		return []jobs.Job{}, nil
+	if attempt.Job.Attempt != job.Attempt || attempt.FencingToken != request.FencingToken {
+		return jobs.Job{}, jobs.ErrStaleAttempt
 	}
-	now := persistedTime(observedAt)
-	ids := make([]jobs.AttemptID, 0)
-	for id, attempt := range store.attempts {
-		job, exists := store.jobs[attempt.Job.ID]
-		if exists && job.State == jobs.StateRunning && attempt.Job.Attempt == job.Attempt && !attempt.HeartbeatDeadline.After(now) {
-			ids = append(ids, id)
-		}
+	if !attempt.HeartbeatDeadline.Equal(persistedTime(request.HeartbeatDeadline)) {
+		return jobs.Job{}, jobs.ErrStaleAttempt
 	}
-	sort.Slice(ids, func(i, j int) bool {
-		left, right := store.attempts[ids[i]], store.attempts[ids[j]]
-		if !left.HeartbeatDeadline.Equal(right.HeartbeatDeadline) {
-			return left.HeartbeatDeadline.Before(right.HeartbeatDeadline)
-		}
-		return left.ID < right.ID
-	})
-	if len(ids) > limit {
-		ids = ids[:limit]
+	if job.State != jobs.StateRunning {
+		return jobs.Job{}, jobs.ErrInvalidTransition
 	}
-	recovered := make([]jobs.Job, 0, len(ids))
-	for _, id := range ids {
-		job, err := store.recoverAttempt(id, now)
-		if err != nil {
-			return nil, err
-		}
-		recovered = append(recovered, job)
+	recoveredAt := persistedTime(request.RecoveredAt)
+	if attempt.HeartbeatDeadline.After(recoveredAt) {
+		return jobs.Job{}, jobs.ErrInvalidTransition
 	}
-	return recovered, nil
+	job.UpdatedAt = recoveredAt
+	if job.CancellationRequested {
+		job.State = jobs.StateCanceled
+	} else {
+		job.State = jobs.StatePending
+		job.AvailableAt = recoveredAt
+	}
+	store.jobs[job.ID] = job
+	return cloneJob(job), nil
 }
 
 // ListRecoveryCandidates returns expired attempts in deterministic deadline order.
@@ -312,39 +305,13 @@ func (store *Store) currentAttempt(id jobs.AttemptID, token coordination.Fencing
 	if attempt.Job.Attempt != job.Attempt {
 		return jobs.Attempt{}, jobs.Job{}, jobs.ErrStaleAttempt
 	}
-	if job.State != jobs.StateRunning {
-		return jobs.Attempt{}, jobs.Job{}, jobs.ErrInvalidTransition
-	}
 	if attempt.FencingToken != token {
 		return jobs.Attempt{}, jobs.Job{}, jobs.ErrStaleAttempt
 	}
-	return attempt, job, nil
-}
-
-func (store *Store) recoverAttempt(id jobs.AttemptID, recoveredAt time.Time) (jobs.Job, error) {
-	attempt, exists := store.attempts[id]
-	if !exists {
-		return jobs.Job{}, jobs.ErrStaleAttempt
-	}
-	job, exists := store.jobs[attempt.Job.ID]
-	if !exists {
-		return jobs.Job{}, jobs.ErrJobNotFound
-	}
-	if attempt.Job.Attempt != job.Attempt {
-		return jobs.Job{}, jobs.ErrStaleAttempt
-	}
 	if job.State != jobs.StateRunning {
-		return jobs.Job{}, jobs.ErrInvalidTransition
+		return jobs.Attempt{}, jobs.Job{}, jobs.ErrInvalidTransition
 	}
-	job.UpdatedAt = recoveredAt
-	if job.CancellationRequested {
-		job.State = jobs.StateCanceled
-	} else {
-		job.State = jobs.StatePending
-		job.AvailableAt = recoveredAt
-	}
-	store.jobs[job.ID] = job
-	return cloneJob(job), nil
+	return attempt, job, nil
 }
 
 func claimable(job jobs.Job, now time.Time, all map[jobs.JobID]jobs.Job) bool {

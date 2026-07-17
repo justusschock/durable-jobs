@@ -56,6 +56,14 @@ type RecoveryCandidate struct {
 	ObservedAt time.Time
 }
 
+// RecoverAttemptRequest identifies one expired attempt observation to recover.
+type RecoverAttemptRequest struct {
+	AttemptID         AttemptID
+	FencingToken      coordination.FencingToken
+	HeartbeatDeadline time.Time
+	RecoveredAt       time.Time
+}
+
 // Store atomically persists durable jobs and their fenced execution attempts.
 type Store interface {
 	Create(context.Context, Job) (Job, error)
@@ -65,7 +73,6 @@ type Store interface {
 	Complete(context.Context, CompleteRequest) (Job, error)
 	Fail(context.Context, FailRequest) (Job, error)
 	RequestCancel(context.Context, JobID, time.Time) (Job, error)
-	RecoverAttempt(context.Context, AttemptID, time.Time) (Job, error)
-	RecoverExpired(context.Context, time.Time, int) ([]Job, error)
+	RecoverAttempt(context.Context, RecoverAttemptRequest) (Job, error)
 	ListRecoveryCandidates(context.Context, time.Time, int) ([]RecoveryCandidate, error)
 }
