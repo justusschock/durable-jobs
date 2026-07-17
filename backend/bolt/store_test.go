@@ -2,6 +2,7 @@ package bolt_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	jobs "github.com/justusschock/go-durable-jobs"
 	boltjobs "github.com/justusschock/go-durable-jobs/backend/bolt"
 	"github.com/justusschock/go-durable-jobs/internal/storetest"
+	bbolt "go.etcd.io/bbolt"
 )
 
 func TestStoreContract(t *testing.T) {
@@ -172,5 +174,52 @@ func TestCloseAllowsImmediateReopen(t *testing.T) {
 	}
 	if err := second.Close(); err != nil {
 		t.Fatalf("second Close() error = %v", err)
+	}
+}
+
+func TestOpenRejectsIncompleteSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "jobs.db")
+	db, err := bbolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatalf("bbolt.Open() error = %v", err)
+	}
+	if err := db.Update(func(tx *bbolt.Tx) error {
+		_, err := tx.CreateBucket([]byte("jobs"))
+		return err
+	}); err != nil {
+		_ = db.Close()
+		t.Fatalf("create jobs bucket error = %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close fixture database error = %v", err)
+	}
+
+	store, err := boltjobs.Open(path, boltjobs.Options{Timeout: time.Second})
+	if !errors.Is(err, boltjobs.ErrUnsupportedFormat) {
+		t.Errorf("Open() error = %v, want ErrUnsupportedFormat", err)
+	}
+	if store != nil {
+		t.Error("Open() store is non-nil for incomplete schema")
+		if err := store.Close(); err != nil {
+			t.Errorf("Close() unexpectedly returned store error = %v", err)
+		}
+	}
+
+	db, err = bbolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatalf("reopen fixture database error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close inspected database error = %v", err)
+		}
+	})
+	if err := db.View(func(tx *bbolt.Tx) error {
+		if tx.Bucket([]byte("attempts")) != nil || tx.Bucket([]byte("meta")) != nil {
+			return errors.New("Open silently recreated missing buckets")
+		}
+		return nil
+	}); err != nil {
+		t.Error(err)
 	}
 }
