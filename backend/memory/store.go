@@ -4,12 +4,12 @@ package memory
 import (
 	"context"
 	"fmt"
-	"sort"
 	"sync"
 	"time"
 
 	coordination "github.com/justusschock/go-distributed-coordination"
 	jobs "github.com/justusschock/go-durable-jobs"
+	"github.com/justusschock/go-durable-jobs/internal/storestate"
 )
 
 // Store keeps all job and attempt state behind one mutex.
@@ -78,10 +78,10 @@ func (store *Store) ClaimReady(ctx context.Context, request jobs.ClaimRequest) (
 	now := persistedTime(request.Now)
 	var selected *jobs.Job
 	for _, candidate := range store.jobs {
-		if candidate.Queue != request.Queue || !claimable(candidate, now, store.jobs) {
+		if candidate.Queue != request.Queue || !storestate.Claimable(candidate, now, store.jobs) {
 			continue
 		}
-		if selected == nil || precedes(candidate, *selected) {
+		if selected == nil || storestate.Precedes(candidate, *selected) {
 			copy := candidate
 			selected = &copy
 		}
@@ -122,15 +122,13 @@ func (store *Store) Heartbeat(ctx context.Context, request jobs.HeartbeatRequest
 	if err != nil {
 		return err
 	}
-	deadline := persistedTime(request.Deadline)
-	if deadline.Equal(attempt.HeartbeatDeadline) {
+	attempt, job, changed, err := storestate.Heartbeat(attempt, job, request)
+	if err != nil {
+		return err
+	}
+	if !changed {
 		return nil
 	}
-	if deadline.Before(attempt.HeartbeatDeadline) {
-		return jobs.ErrInvalidTransition
-	}
-	attempt.HeartbeatDeadline = deadline
-	advanceUpdatedAt(&job, deadline)
 	store.attempts[attempt.ID] = cloneAttempt(attempt)
 	store.jobs[job.ID] = job
 	return nil
@@ -150,14 +148,7 @@ func (store *Store) Complete(ctx context.Context, request jobs.CompleteRequest) 
 	if err != nil {
 		return jobs.Job{}, err
 	}
-	advanceUpdatedAt(&job, request.CompletedAt)
-	if job.CancellationRequested {
-		job.State = jobs.StateCanceled
-		job.Result = nil
-	} else {
-		job.State = jobs.StateSucceeded
-		job.Result = request.Result.Clone().Payload
-	}
+	job = storestate.Complete(job, request)
 	store.jobs[job.ID] = job
 	return cloneJob(job), nil
 }
@@ -176,17 +167,7 @@ func (store *Store) Fail(ctx context.Context, request jobs.FailRequest) (jobs.Jo
 	if err != nil {
 		return jobs.Job{}, err
 	}
-	advanceUpdatedAt(&job, request.FailedAt)
-	failure := request.Failure
-	job.LastFailure = &failure
-	if job.CancellationRequested {
-		job.State = jobs.StateCanceled
-	} else if request.Failure.Retryable && job.Attempt < job.Retry.MaxAttempts {
-		job.State = jobs.StateRetryWaiting
-		job.AvailableAt = persistedTime(request.NextAvailableAt)
-	} else {
-		job.State = jobs.StateFailed
-	}
+	job = storestate.Fail(job, request)
 	store.jobs[job.ID] = job
 	return cloneJob(job), nil
 }
@@ -205,13 +186,9 @@ func (store *Store) RequestCancel(ctx context.Context, id jobs.JobID, requestedA
 	if !exists {
 		return jobs.Job{}, jobs.ErrJobNotFound
 	}
-	if job.State == jobs.StateSucceeded || job.State == jobs.StateFailed || job.State == jobs.StateCanceled {
-		return jobs.Job{}, jobs.ErrInvalidTransition
-	}
-	job.CancellationRequested = true
-	advanceUpdatedAt(&job, requestedAt)
-	if job.State == jobs.StatePending || job.State == jobs.StateRetryWaiting {
-		job.State = jobs.StateCanceled
+	job, err := storestate.RequestCancel(job, requestedAt)
+	if err != nil {
+		return jobs.Job{}, err
 	}
 	store.jobs[id] = job
 	return cloneJob(job), nil
@@ -235,25 +212,9 @@ func (store *Store) RecoverAttempt(ctx context.Context, request jobs.RecoverAtte
 	if !exists {
 		return jobs.Job{}, jobs.ErrJobNotFound
 	}
-	if attempt.Job.Attempt != job.Attempt || attempt.FencingToken != request.FencingToken {
-		return jobs.Job{}, jobs.ErrStaleAttempt
-	}
-	if !attempt.HeartbeatDeadline.Equal(persistedTime(request.HeartbeatDeadline)) {
-		return jobs.Job{}, jobs.ErrStaleAttempt
-	}
-	if job.State != jobs.StateRunning {
-		return jobs.Job{}, jobs.ErrInvalidTransition
-	}
-	recoveredAt := persistedTime(request.RecoveredAt)
-	if attempt.HeartbeatDeadline.After(recoveredAt) {
-		return jobs.Job{}, jobs.ErrInvalidTransition
-	}
-	advanceUpdatedAt(&job, recoveredAt)
-	if job.CancellationRequested {
-		job.State = jobs.StateCanceled
-	} else {
-		job.State = jobs.StatePending
-		job.AvailableAt = recoveredAt
+	job, err := storestate.RecoverAttempt(attempt, job, request)
+	if err != nil {
+		return jobs.Job{}, err
 	}
 	store.jobs[job.ID] = job
 	return cloneJob(job), nil
@@ -272,7 +233,7 @@ func (store *Store) ListRecoveryCandidates(ctx context.Context, observedAt time.
 	if limit <= 0 {
 		return []jobs.RecoveryCandidate{}, nil
 	}
-	now := persistedTime(observedAt)
+	now := storestate.PersistedTime(observedAt)
 	candidates := make([]jobs.RecoveryCandidate, 0)
 	for _, attempt := range store.attempts {
 		job, exists := store.jobs[attempt.Job.ID]
@@ -280,13 +241,7 @@ func (store *Store) ListRecoveryCandidates(ctx context.Context, observedAt time.
 			candidates = append(candidates, jobs.RecoveryCandidate{Attempt: cloneAttempt(attempt), ObservedAt: now})
 		}
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		left, right := candidates[i].Attempt, candidates[j].Attempt
-		if !left.HeartbeatDeadline.Equal(right.HeartbeatDeadline) {
-			return left.HeartbeatDeadline.Before(right.HeartbeatDeadline)
-		}
-		return left.ID < right.ID
-	})
+	storestate.SortRecoveryCandidates(candidates)
 	if len(candidates) > limit {
 		candidates = candidates[:limit]
 	}
@@ -302,64 +257,26 @@ func (store *Store) currentAttempt(id jobs.AttemptID, token coordination.Fencing
 	if !exists {
 		return jobs.Attempt{}, jobs.Job{}, jobs.ErrJobNotFound
 	}
-	if attempt.Job.Attempt != job.Attempt {
-		return jobs.Attempt{}, jobs.Job{}, jobs.ErrStaleAttempt
-	}
-	if attempt.FencingToken != token {
-		return jobs.Attempt{}, jobs.Job{}, jobs.ErrStaleAttempt
-	}
-	if job.State != jobs.StateRunning {
-		return jobs.Attempt{}, jobs.Job{}, jobs.ErrInvalidTransition
+	if err := storestate.CurrentAttempt(attempt, job, token); err != nil {
+		return jobs.Attempt{}, jobs.Job{}, err
 	}
 	return attempt, job, nil
 }
 
-func claimable(job jobs.Job, now time.Time, all map[jobs.JobID]jobs.Job) bool {
-	if (job.State != jobs.StatePending && job.State != jobs.StateRetryWaiting) || job.AvailableAt.After(now) {
-		return false
-	}
-	for _, dependency := range job.DependsOn {
-		dependencyJob, exists := all[dependency]
-		if !exists || dependencyJob.State != jobs.StateSucceeded {
-			return false
-		}
-	}
-	return true
-}
-
-func precedes(left, right jobs.Job) bool {
-	if left.Priority != right.Priority {
-		return left.Priority > right.Priority
-	}
-	if !left.AvailableAt.Equal(right.AvailableAt) {
-		return left.AvailableAt.Before(right.AvailableAt)
-	}
-	return left.ID < right.ID
-}
-
-func cloneJob(job jobs.Job) jobs.Job { return job.Clone() }
+func cloneJob(job jobs.Job) jobs.Job { return storestate.CloneJob(job) }
 
 func cloneAttempt(attempt jobs.Attempt) jobs.Attempt {
-	attempt.Job = cloneJob(attempt.Job)
-	return attempt
+	return storestate.CloneAttempt(attempt)
 }
 
 func normalizeJobTimes(job *jobs.Job) {
-	job.CreatedAt = persistedTime(job.CreatedAt)
-	job.AvailableAt = persistedTime(job.AvailableAt)
-	job.UpdatedAt = persistedTime(job.UpdatedAt)
+	storestate.NormalizeJobTimes(job)
 }
 
 func advanceUpdatedAt(job *jobs.Job, candidate time.Time) {
-	candidate = persistedTime(candidate)
-	if candidate.After(job.UpdatedAt) {
-		job.UpdatedAt = candidate
-	}
+	storestate.AdvanceUpdatedAt(job, candidate)
 }
 
 func persistedTime(value time.Time) time.Time {
-	if value.IsZero() {
-		return time.Time{}
-	}
-	return value.Round(0).UTC()
+	return storestate.PersistedTime(value)
 }

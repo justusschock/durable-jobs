@@ -1,10 +1,13 @@
 module github.com/justusschock/go-durable-jobs
 
-go 1.26.0
+go 1.22
 
 require (
-	github.com/justusschock/go-distributed-coordination v0.1.0
-	github.com/justusschock/go-messaging v0.1.0
-	github.com/justusschock/go-reconciliation v0.1.0
-	go.etcd.io/bbolt v1.4.3
+	github.com/justusschock/go-distributed-coordination v0.2.0
+	go.etcd.io/bbolt v1.3.11
+)
+
+require (
+	github.com/justusschock/go-concurrency v0.2.0 // indirect
+	golang.org/x/sys v0.4.0 // indirect
 )
