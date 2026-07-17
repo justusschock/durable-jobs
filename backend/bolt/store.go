@@ -33,7 +33,13 @@ type Store struct {
 	db *bbolt.DB
 }
 
-// Open opens path with owner-only permissions and creates the required buckets.
+type bucketSet struct {
+	jobs     *bbolt.Bucket
+	attempts *bbolt.Bucket
+	meta     *bbolt.Bucket
+}
+
+// Open opens path with owner-only permissions and validates its schema.
 func Open(path string, options Options) (*Store, error) {
 	if path == "" {
 		return nil, errors.New("durable jobs bolt: empty path")
@@ -41,22 +47,27 @@ func Open(path string, options Options) (*Store, error) {
 	if options.Timeout < 0 {
 		return nil, errors.New("durable jobs bolt: negative timeout")
 	}
+	initialize, err := needsInitialization(path)
+	if err != nil {
+		return nil, err
+	}
 	db, err := bbolt.Open(path, 0o600, &bbolt.Options{Timeout: options.Timeout, NoSync: options.NoSync})
 	if err != nil {
 		return nil, err
 	}
-	if err := os.Chmod(path, 0o600); err != nil {
+	if initialize {
+		err = db.Update(initializeBuckets)
+	} else {
+		err = db.View(func(tx *bbolt.Tx) error {
+			_, err := checkedBuckets(tx)
+			return err
+		})
+	}
+	if err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-	if err := db.Update(func(tx *bbolt.Tx) error {
-		for _, name := range [][]byte{jobsBucket, attemptsBucket, metaBucket} {
-			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
+	if err := os.Chmod(path, 0o600); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -76,7 +87,11 @@ func (store *Store) Create(ctx context.Context, job jobs.Job) (jobs.Job, error) 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		bucket := tx.Bucket(jobsBucket)
+		buckets, err := checkedBuckets(tx)
+		if err != nil {
+			return err
+		}
+		bucket := buckets.jobs
 		key := []byte(job.ID)
 		if bucket.Get(key) != nil {
 			return jobs.ErrJobExists
@@ -101,8 +116,11 @@ func (store *Store) Get(ctx context.Context, id jobs.JobID) (jobs.Job, error) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		var err error
-		job, err = getJob(tx.Bucket(jobsBucket), id)
+		buckets, err := checkedBuckets(tx)
+		if err != nil {
+			return err
+		}
+		job, err = getJob(buckets.jobs, id)
 		return err
 	})
 	if err != nil {
@@ -121,7 +139,11 @@ func (store *Store) ClaimReady(ctx context.Context, request jobs.ClaimRequest) (
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		all, err := allJobs(tx.Bucket(jobsBucket))
+		buckets, err := checkedBuckets(tx)
+		if err != nil {
+			return err
+		}
+		all, err := allJobs(buckets.jobs)
 		if err != nil {
 			return err
 		}
@@ -143,7 +165,7 @@ func (store *Store) ClaimReady(ctx context.Context, request jobs.ClaimRequest) (
 		job.State = jobs.StateRunning
 		job.Attempt++
 		storestate.AdvanceUpdatedAt(&job, now)
-		sequence, err := nextAttemptSequence(tx.Bucket(metaBucket))
+		sequence, err := nextAttemptSequence(buckets.meta)
 		if err != nil {
 			return err
 		}
@@ -155,10 +177,10 @@ func (store *Store) ClaimReady(ctx context.Context, request jobs.ClaimRequest) (
 			StartedAt:         now,
 			HeartbeatDeadline: storestate.PersistedTime(request.HeartbeatDeadline),
 		}
-		if err := put(tx.Bucket(jobsBucket), []byte(job.ID), job); err != nil {
+		if err := put(buckets.jobs, []byte(job.ID), job); err != nil {
 			return err
 		}
-		return put(tx.Bucket(attemptsBucket), []byte(attempt.ID), attempt)
+		return put(buckets.attempts, []byte(attempt.ID), attempt)
 	})
 	if err != nil {
 		return jobs.Attempt{}, err
@@ -175,7 +197,11 @@ func (store *Store) Heartbeat(ctx context.Context, request jobs.HeartbeatRequest
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		attempt, job, err := currentAttempt(tx, request.AttemptID, request.FencingToken)
+		buckets, err := checkedBuckets(tx)
+		if err != nil {
+			return err
+		}
+		attempt, job, err := currentAttempt(buckets, request.AttemptID, request.FencingToken)
 		if err != nil {
 			return err
 		}
@@ -183,10 +209,10 @@ func (store *Store) Heartbeat(ctx context.Context, request jobs.HeartbeatRequest
 		if err != nil || !changed {
 			return err
 		}
-		if err := put(tx.Bucket(attemptsBucket), []byte(attempt.ID), attempt); err != nil {
+		if err := put(buckets.attempts, []byte(attempt.ID), attempt); err != nil {
 			return err
 		}
-		return put(tx.Bucket(jobsBucket), []byte(job.ID), job)
+		return put(buckets.jobs, []byte(job.ID), job)
 	})
 }
 
@@ -200,12 +226,16 @@ func (store *Store) Complete(ctx context.Context, request jobs.CompleteRequest) 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		_, job, err := currentAttempt(tx, request.AttemptID, request.FencingToken)
+		buckets, err := checkedBuckets(tx)
+		if err != nil {
+			return err
+		}
+		_, job, err := currentAttempt(buckets, request.AttemptID, request.FencingToken)
 		if err != nil {
 			return err
 		}
 		completed = storestate.Complete(job, request)
-		return put(tx.Bucket(jobsBucket), []byte(completed.ID), completed)
+		return put(buckets.jobs, []byte(completed.ID), completed)
 	})
 	if err != nil {
 		return jobs.Job{}, err
@@ -223,12 +253,16 @@ func (store *Store) Fail(ctx context.Context, request jobs.FailRequest) (jobs.Jo
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		_, job, err := currentAttempt(tx, request.AttemptID, request.FencingToken)
+		buckets, err := checkedBuckets(tx)
+		if err != nil {
+			return err
+		}
+		_, job, err := currentAttempt(buckets, request.AttemptID, request.FencingToken)
 		if err != nil {
 			return err
 		}
 		failed = storestate.Fail(job, request)
-		return put(tx.Bucket(jobsBucket), []byte(failed.ID), failed)
+		return put(buckets.jobs, []byte(failed.ID), failed)
 	})
 	if err != nil {
 		return jobs.Job{}, err
@@ -246,7 +280,11 @@ func (store *Store) RequestCancel(ctx context.Context, id jobs.JobID, requestedA
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		job, err := getJob(tx.Bucket(jobsBucket), id)
+		buckets, err := checkedBuckets(tx)
+		if err != nil {
+			return err
+		}
+		job, err := getJob(buckets.jobs, id)
 		if err != nil {
 			return err
 		}
@@ -254,7 +292,7 @@ func (store *Store) RequestCancel(ctx context.Context, id jobs.JobID, requestedA
 		if err != nil {
 			return err
 		}
-		return put(tx.Bucket(jobsBucket), []byte(canceled.ID), canceled)
+		return put(buckets.jobs, []byte(canceled.ID), canceled)
 	})
 	if err != nil {
 		return jobs.Job{}, err
@@ -272,11 +310,15 @@ func (store *Store) RecoverAttempt(ctx context.Context, request jobs.RecoverAtte
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		attempt, err := getAttempt(tx.Bucket(attemptsBucket), request.AttemptID)
+		buckets, err := checkedBuckets(tx)
 		if err != nil {
 			return err
 		}
-		job, err := getJob(tx.Bucket(jobsBucket), attempt.Job.ID)
+		attempt, err := getAttempt(buckets.attempts, request.AttemptID)
+		if err != nil {
+			return err
+		}
+		job, err := getJob(buckets.jobs, attempt.Job.ID)
 		if err != nil {
 			return err
 		}
@@ -284,7 +326,7 @@ func (store *Store) RecoverAttempt(ctx context.Context, request jobs.RecoverAtte
 		if err != nil {
 			return err
 		}
-		return put(tx.Bucket(jobsBucket), []byte(recovered.ID), recovered)
+		return put(buckets.jobs, []byte(recovered.ID), recovered)
 	})
 	if err != nil {
 		return jobs.Job{}, err
@@ -298,19 +340,29 @@ func (store *Store) ListRecoveryCandidates(ctx context.Context, observedAt time.
 		return nil, err
 	}
 	if limit <= 0 {
-		return []jobs.RecoveryCandidate{}, store.db.View(func(tx *bbolt.Tx) error { return ctx.Err() })
+		return []jobs.RecoveryCandidate{}, store.db.View(func(tx *bbolt.Tx) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			_, err := checkedBuckets(tx)
+			return err
+		})
 	}
 	var candidates []jobs.RecoveryCandidate
 	err := store.db.View(func(tx *bbolt.Tx) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		jobsByID, err := allJobs(tx.Bucket(jobsBucket))
+		buckets, err := checkedBuckets(tx)
+		if err != nil {
+			return err
+		}
+		jobsByID, err := allJobs(buckets.jobs)
 		if err != nil {
 			return err
 		}
 		now := storestate.PersistedTime(observedAt)
-		return tx.Bucket(attemptsBucket).ForEach(func(_, value []byte) error {
+		return buckets.attempts.ForEach(func(_, value []byte) error {
 			var attempt jobs.Attempt
 			if err := decode(bytes.Clone(value), &attempt); err != nil {
 				return err
@@ -333,12 +385,12 @@ func (store *Store) ListRecoveryCandidates(ctx context.Context, observedAt time.
 	return candidates, nil
 }
 
-func currentAttempt(tx *bbolt.Tx, id jobs.AttemptID, token coordination.FencingToken) (jobs.Attempt, jobs.Job, error) {
-	attempt, err := getAttempt(tx.Bucket(attemptsBucket), id)
+func currentAttempt(buckets bucketSet, id jobs.AttemptID, token coordination.FencingToken) (jobs.Attempt, jobs.Job, error) {
+	attempt, err := getAttempt(buckets.attempts, id)
 	if err != nil {
 		return jobs.Attempt{}, jobs.Job{}, err
 	}
-	job, err := getJob(tx.Bucket(jobsBucket), attempt.Job.ID)
+	job, err := getJob(buckets.jobs, attempt.Job.ID)
 	if err != nil {
 		return jobs.Attempt{}, jobs.Job{}, err
 	}
@@ -346,6 +398,38 @@ func currentAttempt(tx *bbolt.Tx, id jobs.AttemptID, token coordination.FencingT
 		return jobs.Attempt{}, jobs.Job{}, err
 	}
 	return attempt, job, nil
+}
+
+func needsInitialization(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err == nil {
+		return info.Size() == 0, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	}
+	return false, err
+}
+
+func initializeBuckets(tx *bbolt.Tx) error {
+	for _, name := range [][]byte{jobsBucket, attemptsBucket, metaBucket} {
+		if _, err := tx.CreateBucket(name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func checkedBuckets(tx *bbolt.Tx) (bucketSet, error) {
+	buckets := bucketSet{
+		jobs:     tx.Bucket(jobsBucket),
+		attempts: tx.Bucket(attemptsBucket),
+		meta:     tx.Bucket(metaBucket),
+	}
+	if buckets.jobs == nil || buckets.attempts == nil || buckets.meta == nil {
+		return bucketSet{}, ErrUnsupportedFormat
+	}
+	return buckets, nil
 }
 
 func getJob(bucket *bbolt.Bucket, id jobs.JobID) (jobs.Job, error) {
