@@ -93,7 +93,7 @@ func (store *Store) ClaimReady(ctx context.Context, request jobs.ClaimRequest) (
 	job := *selected
 	job.State = jobs.StateRunning
 	job.Attempt++
-	job.UpdatedAt = now
+	advanceUpdatedAt(&job, now)
 	store.nextAttempt++
 	attempt := jobs.Attempt{
 		ID:                jobs.AttemptID(fmt.Sprintf("%s-%d", job.ID, store.nextAttempt)),
@@ -130,7 +130,7 @@ func (store *Store) Heartbeat(ctx context.Context, request jobs.HeartbeatRequest
 		return jobs.ErrInvalidTransition
 	}
 	attempt.HeartbeatDeadline = deadline
-	job.UpdatedAt = deadline
+	advanceUpdatedAt(&job, deadline)
 	store.attempts[attempt.ID] = cloneAttempt(attempt)
 	store.jobs[job.ID] = job
 	return nil
@@ -150,7 +150,7 @@ func (store *Store) Complete(ctx context.Context, request jobs.CompleteRequest) 
 	if err != nil {
 		return jobs.Job{}, err
 	}
-	job.UpdatedAt = persistedTime(request.CompletedAt)
+	advanceUpdatedAt(&job, request.CompletedAt)
 	if job.CancellationRequested {
 		job.State = jobs.StateCanceled
 		job.Result = nil
@@ -176,7 +176,7 @@ func (store *Store) Fail(ctx context.Context, request jobs.FailRequest) (jobs.Jo
 	if err != nil {
 		return jobs.Job{}, err
 	}
-	job.UpdatedAt = persistedTime(request.FailedAt)
+	advanceUpdatedAt(&job, request.FailedAt)
 	failure := request.Failure
 	job.LastFailure = &failure
 	if job.CancellationRequested {
@@ -209,7 +209,7 @@ func (store *Store) RequestCancel(ctx context.Context, id jobs.JobID, requestedA
 		return jobs.Job{}, jobs.ErrInvalidTransition
 	}
 	job.CancellationRequested = true
-	job.UpdatedAt = persistedTime(requestedAt)
+	advanceUpdatedAt(&job, requestedAt)
 	if job.State == jobs.StatePending || job.State == jobs.StateRetryWaiting {
 		job.State = jobs.StateCanceled
 	}
@@ -248,7 +248,7 @@ func (store *Store) RecoverAttempt(ctx context.Context, request jobs.RecoverAtte
 	if attempt.HeartbeatDeadline.After(recoveredAt) {
 		return jobs.Job{}, jobs.ErrInvalidTransition
 	}
-	job.UpdatedAt = recoveredAt
+	advanceUpdatedAt(&job, recoveredAt)
 	if job.CancellationRequested {
 		job.State = jobs.StateCanceled
 	} else {
@@ -348,6 +348,13 @@ func normalizeJobTimes(job *jobs.Job) {
 	job.CreatedAt = persistedTime(job.CreatedAt)
 	job.AvailableAt = persistedTime(job.AvailableAt)
 	job.UpdatedAt = persistedTime(job.UpdatedAt)
+}
+
+func advanceUpdatedAt(job *jobs.Job, candidate time.Time) {
+	candidate = persistedTime(candidate)
+	if candidate.After(job.UpdatedAt) {
+		job.UpdatedAt = candidate
+	}
 }
 
 func persistedTime(value time.Time) time.Time {
