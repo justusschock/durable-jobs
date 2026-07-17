@@ -11,5 +11,5 @@ func persistedTime(value time.Time) time.Time {
 	if value.IsZero() {
 		return time.Time{}
 	}
-	return time.Unix(0, value.UnixNano()).UTC()
+	return value.Round(0).UTC()
 }
