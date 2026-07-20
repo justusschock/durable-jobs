@@ -21,25 +21,63 @@ func TestClientConstructorRejectsNilDependencies(t *testing.T) {
 	store := memory.New()
 	publisher := &recordingPublisher[jobs.Wakeup]{}
 	clock := fixedClientClock{now: time.Unix(100, 0)}
+	var typedNilStore *memory.Store
+	var typedNilPublisher *recordingPublisher[jobs.Wakeup]
+	var typedNilClock *settableClientClock
 
-	for name, construct := range map[string]func() error{
-		"store": func() error {
-			_, err := jobs.NewClient(nil, publisher, clock)
-			return err
+	tests := []struct {
+		name      string
+		construct func() error
+	}{
+		{
+			name: "store",
+			construct: func() error {
+				_, err := jobs.NewClient(nil, publisher, clock)
+				return err
+			},
 		},
-		"publisher": func() error {
-			_, err := jobs.NewClient(store, nil, clock)
-			return err
+		{
+			name: "publisher",
+			construct: func() error {
+				_, err := jobs.NewClient(store, nil, clock)
+				return err
+			},
 		},
-		"clock": func() error {
-			_, err := jobs.NewClient(store, publisher, nil)
-			return err
+		{
+			name: "clock",
+			construct: func() error {
+				_, err := jobs.NewClient(store, publisher, nil)
+				return err
+			},
 		},
-	} {
-		name, construct := name, construct
-		t.Run(name, func(t *testing.T) {
+		{
+			name: "typed nil store",
+			construct: func() error {
+				_, err := jobs.NewClient(typedNilStore, publisher, clock)
+				return err
+			},
+		},
+		{
+			name: "typed nil publisher",
+			construct: func() error {
+				_, err := jobs.NewClient(store, typedNilPublisher, clock)
+				return err
+			},
+		},
+		{
+			name: "typed nil clock",
+			construct: func() error {
+				_, err := jobs.NewClient(store, publisher, typedNilClock)
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			if err := construct(); err == nil {
+			if err := test.construct(); err == nil {
 				t.Fatal("NewClient() error = nil, want non-nil")
 			}
 		})
