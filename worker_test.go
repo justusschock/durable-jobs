@@ -181,8 +181,9 @@ func TestWorkerCancellationPollingCancelsHandler(t *testing.T) {
 	if len(store.completeRequests) != 0 || len(store.failRequests) != 1 {
 		t.Fatalf("terminal transitions after cancellation polling: complete=%d fail=%d, want one fenced Fail", len(store.completeRequests), len(store.failRequests))
 	}
-	if got := store.failRequests[0].FencingToken; got != 13 {
-		t.Fatalf("Fail() fencing token = %d, want 13", got)
+	wantFence := backend.leases[0].Info().Token
+	if got := store.failRequests[0].FencingToken; got != wantFence {
+		t.Fatalf("Fail() fencing token = %d, want acquired claim fence %d", got, wantFence)
 	}
 }
 
@@ -206,8 +207,9 @@ func TestWorkerHandlerErrorSchedulesRetryWithBoundedDelay(t *testing.T) {
 		t.Fatalf("Fail() calls = %d, want 1", len(store.failRequests))
 	}
 	request := store.failRequests[0]
-	if request.FencingToken != 15 || request.Failure.Code != "handler_error" || !request.Failure.Retryable {
-		t.Fatalf("Fail() request = %#v, want retryable handler_error with fence 15", request)
+	wantFence := backend.leases[0].Info().Token
+	if request.FencingToken != wantFence || request.Failure.Code != "handler_error" || !request.Failure.Retryable {
+		t.Fatalf("Fail() request = %#v, want retryable handler_error with acquired claim fence %d", request, wantFence)
 	}
 	wantNext := time.Unix(101, 0).UTC()
 	if !request.NextAvailableAt.Equal(wantNext) {
@@ -240,6 +242,30 @@ func TestWorkerPanicRecordsNonRetryableHandlerPanicFailure(t *testing.T) {
 	}
 	if len(store.completeRequests) != 0 {
 		t.Fatalf("Complete() calls = %d, want 0", len(store.completeRequests))
+	}
+}
+
+func TestWorkerSuccessfulHandlerPublishesCanceledWhenCompleteReturnsCanceled(t *testing.T) {
+	t.Parallel()
+
+	store := newWorkerStore()
+	store.claimAttempt = workerAttempt("canceled-on-complete", 19)
+	store.completeState = jobs.StateCanceled
+	backend := newWorkerBackend()
+	publisher := &workerEventPublisher{}
+	registry := newWorkerRegistry(t, "send-email", func(context.Context, jobs.Job) (jobs.Result, error) {
+		return jobs.Result{Payload: []byte("ignored")}, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	store.afterComplete = cancel
+
+	worker := mustNewWorker(t, store, backend, publisher, registry, validWorkerOptions(workerClock{now: time.Unix(100, 0)}))
+	waitForRun(t, runWorker(ctx, worker))
+
+	kinds := publisher.kinds()
+	if len(kinds) < 2 || kinds[len(kinds)-1] != jobs.EventCanceled {
+		t.Fatalf("published event kinds = %v, want canceled last", kinds)
 	}
 }
 
@@ -382,6 +408,7 @@ type workerStore struct {
 	claimAttempt      jobs.Attempt
 	claimed           bool
 	getJob            jobs.Job
+	completeState     jobs.State
 	claimRequests     []jobs.ClaimRequest
 	heartbeatRequests []jobs.HeartbeatRequest
 	completeRequests  []jobs.CompleteRequest
@@ -439,7 +466,10 @@ func (store *workerStore) Complete(_ context.Context, request jobs.CompleteReque
 	defer store.mu.Unlock()
 	store.completeRequests = append(store.completeRequests, request)
 	job := store.getJob.Clone()
-	job.State = jobs.StateSucceeded
+	job.State = store.completeState
+	if job.State == 0 {
+		job.State = jobs.StateSucceeded
+	}
 	if store.afterComplete != nil {
 		store.afterComplete()
 	}
