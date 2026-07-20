@@ -2,8 +2,11 @@
 package storestate
 
 import (
+	"fmt"
 	"sort"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	coordination "github.com/justusschock/go-distributed-coordination"
 	jobs "github.com/justusschock/go-durable-jobs"
@@ -177,4 +180,77 @@ func SortRecoveryCandidates(candidates []jobs.RecoveryCandidate) {
 		}
 		return left.ID < right.ID
 	})
+}
+
+// CloneSchedule returns an independently owned schedule snapshot.
+func CloneSchedule(schedule jobs.Schedule) jobs.Schedule { return schedule.Clone() }
+
+// NormalizeScheduleTimes prepares a schedule for durable storage.
+func NormalizeScheduleTimes(schedule *jobs.Schedule) {
+	schedule.NextRunAt = PersistedTime(schedule.NextRunAt)
+}
+
+// ValidateSchedule verifies durable schedule invariants.
+func ValidateSchedule(schedule jobs.Schedule) error {
+	id := string(schedule.ID)
+	if strings.TrimSpace(id) == "" || !utf8.ValidString(id) || strings.ContainsRune(id, '\x00') {
+		return fmt.Errorf("%w: invalid schedule identity", jobs.ErrInvalidJob)
+	}
+	if err := jobs.ValidateEnqueue(schedule.Request); err != nil {
+		return err
+	}
+	if schedule.Interval < 0 {
+		return fmt.Errorf("%w: negative schedule interval", jobs.ErrInvalidJob)
+	}
+	if schedule.Enabled && schedule.NextRunAt.IsZero() {
+		return fmt.Errorf("%w: enabled schedule has no next run", jobs.ErrInvalidJob)
+	}
+	return nil
+}
+
+// SortSchedules orders schedules by next run and then ID.
+func SortSchedules(schedules []jobs.Schedule) {
+	sort.Slice(schedules, func(left, right int) bool {
+		if !schedules[left].NextRunAt.Equal(schedules[right].NextRunAt) {
+			return schedules[left].NextRunAt.Before(schedules[right].NextRunAt)
+		}
+		return schedules[left].ID < schedules[right].ID
+	})
+}
+
+// PropagateDependencyFailures terminally fails pending transitive dependents.
+func PropagateDependencyFailures(all map[jobs.JobID]jobs.Job, failedAt time.Time) []jobs.JobID {
+	failedAt = PersistedTime(failedAt)
+	changed := make([]jobs.JobID, 0)
+	for {
+		ids := make([]jobs.JobID, 0, len(all))
+		for id := range all {
+			ids = append(ids, id)
+		}
+		sort.Slice(ids, func(left, right int) bool { return ids[left] < ids[right] })
+
+		propagated := false
+		for _, id := range ids {
+			job := all[id]
+			if job.State != jobs.StatePending {
+				continue
+			}
+			for _, dependency := range job.DependsOn {
+				dependencyJob, exists := all[dependency]
+				if !exists || (dependencyJob.State != jobs.StateFailed && dependencyJob.State != jobs.StateCanceled) {
+					continue
+				}
+				job.State = jobs.StateFailed
+				job.LastFailure = &jobs.Failure{Code: "dependency_failed", Message: "dependency did not succeed"}
+				AdvanceUpdatedAt(&job, failedAt)
+				all[id] = job
+				changed = append(changed, id)
+				propagated = true
+				break
+			}
+		}
+		if !propagated {
+			return changed
+		}
+	}
 }

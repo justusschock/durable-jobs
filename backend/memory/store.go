@@ -17,14 +17,16 @@ type Store struct {
 	mu          sync.Mutex
 	jobs        map[jobs.JobID]jobs.Job
 	attempts    map[jobs.AttemptID]jobs.Attempt
+	schedules   map[jobs.ScheduleID]jobs.Schedule
 	nextAttempt uint64
 }
 
 // New creates an empty Store.
 func New() *Store {
 	return &Store{
-		jobs:     make(map[jobs.JobID]jobs.Job),
-		attempts: make(map[jobs.AttemptID]jobs.Attempt),
+		jobs:      make(map[jobs.JobID]jobs.Job),
+		attempts:  make(map[jobs.AttemptID]jobs.Attempt),
+		schedules: make(map[jobs.ScheduleID]jobs.Schedule),
 	}
 }
 
@@ -150,6 +152,7 @@ func (store *Store) Complete(ctx context.Context, request jobs.CompleteRequest) 
 	}
 	job = storestate.Complete(job, request)
 	store.jobs[job.ID] = job
+	store.propagateDependencyFailures(job)
 	return cloneJob(job), nil
 }
 
@@ -169,6 +172,7 @@ func (store *Store) Fail(ctx context.Context, request jobs.FailRequest) (jobs.Jo
 	}
 	job = storestate.Fail(job, request)
 	store.jobs[job.ID] = job
+	store.propagateDependencyFailures(job)
 	return cloneJob(job), nil
 }
 
@@ -191,6 +195,7 @@ func (store *Store) RequestCancel(ctx context.Context, id jobs.JobID, requestedA
 		return jobs.Job{}, err
 	}
 	store.jobs[id] = job
+	store.propagateDependencyFailures(job)
 	return cloneJob(job), nil
 }
 
@@ -217,7 +222,121 @@ func (store *Store) RecoverAttempt(ctx context.Context, request jobs.RecoverAtte
 		return jobs.Job{}, err
 	}
 	store.jobs[job.ID] = job
+	store.propagateDependencyFailures(job)
 	return cloneJob(job), nil
+}
+
+// PutSchedule creates or revision-fenced updates a durable schedule.
+func (store *Store) PutSchedule(ctx context.Context, schedule jobs.Schedule, expectedRevision uint64) (jobs.Schedule, error) {
+	if err := ctx.Err(); err != nil {
+		return jobs.Schedule{}, err
+	}
+	if err := storestate.ValidateSchedule(schedule); err != nil {
+		return jobs.Schedule{}, err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return jobs.Schedule{}, err
+	}
+	current, exists := store.schedules[schedule.ID]
+	if !exists {
+		if expectedRevision != 0 {
+			return jobs.Schedule{}, jobs.ErrJobNotFound
+		}
+		schedule.Revision = 1
+	} else {
+		if expectedRevision == 0 {
+			return jobs.Schedule{}, jobs.ErrJobExists
+		}
+		if current.Revision != expectedRevision {
+			return jobs.Schedule{}, jobs.ErrStaleAttempt
+		}
+		schedule.Revision = current.Revision + 1
+	}
+	schedule = storestate.CloneSchedule(schedule)
+	storestate.NormalizeScheduleTimes(&schedule)
+	store.schedules[schedule.ID] = schedule
+	return storestate.CloneSchedule(schedule), nil
+}
+
+// GetSchedule returns an independently owned schedule snapshot.
+func (store *Store) GetSchedule(ctx context.Context, id jobs.ScheduleID) (jobs.Schedule, error) {
+	if err := ctx.Err(); err != nil {
+		return jobs.Schedule{}, err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return jobs.Schedule{}, err
+	}
+	schedule, exists := store.schedules[id]
+	if !exists {
+		return jobs.Schedule{}, jobs.ErrJobNotFound
+	}
+	return storestate.CloneSchedule(schedule), nil
+}
+
+// ListDueSchedules returns enabled due schedules in deterministic order.
+func (store *Store) ListDueSchedules(ctx context.Context, now time.Time, limit int) ([]jobs.Schedule, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		return []jobs.Schedule{}, nil
+	}
+	now = persistedTime(now)
+	due := make([]jobs.Schedule, 0)
+	for _, schedule := range store.schedules {
+		if schedule.Enabled && !schedule.NextRunAt.After(now) {
+			due = append(due, storestate.CloneSchedule(schedule))
+		}
+	}
+	storestate.SortSchedules(due)
+	if len(due) > limit {
+		due = due[:limit]
+	}
+	return due, nil
+}
+
+// AdvanceSchedule moves a schedule cursor using its current revision fence.
+func (store *Store) AdvanceSchedule(ctx context.Context, id jobs.ScheduleID, expectedRevision uint64, nextRunAt time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	schedule, exists := store.schedules[id]
+	if !exists {
+		return jobs.ErrJobNotFound
+	}
+	if schedule.Revision != expectedRevision {
+		return jobs.ErrStaleAttempt
+	}
+	nextRunAt = persistedTime(nextRunAt)
+	if !nextRunAt.IsZero() && !nextRunAt.After(schedule.NextRunAt) {
+		return jobs.ErrInvalidTransition
+	}
+	schedule.NextRunAt = nextRunAt
+	schedule.Enabled = !nextRunAt.IsZero()
+	schedule.Revision++
+	store.schedules[id] = schedule
+	return nil
+}
+
+func (store *Store) propagateDependencyFailures(terminal jobs.Job) {
+	if terminal.State != jobs.StateFailed && terminal.State != jobs.StateCanceled {
+		return
+	}
+	storestate.PropagateDependencyFailures(store.jobs, terminal.UpdatedAt)
 }
 
 // ListRecoveryCandidates returns expired attempts in deterministic deadline order.

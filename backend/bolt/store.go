@@ -18,6 +18,7 @@ import (
 var (
 	jobsBucket         = []byte("jobs")
 	attemptsBucket     = []byte("attempts")
+	schedulesBucket    = []byte("schedules")
 	metaBucket         = []byte("meta")
 	attemptSequenceKey = []byte("attempt_sequence")
 )
@@ -34,9 +35,10 @@ type Store struct {
 }
 
 type bucketSet struct {
-	jobs     *bbolt.Bucket
-	attempts *bbolt.Bucket
-	meta     *bbolt.Bucket
+	jobs      *bbolt.Bucket
+	attempts  *bbolt.Bucket
+	schedules *bbolt.Bucket
+	meta      *bbolt.Bucket
 }
 
 // Open opens path with owner-only permissions and validates its schema.
@@ -235,7 +237,7 @@ func (store *Store) Complete(ctx context.Context, request jobs.CompleteRequest) 
 			return err
 		}
 		completed = storestate.Complete(job, request)
-		return put(buckets.jobs, []byte(completed.ID), completed)
+		return putTerminalAndPropagate(buckets, completed)
 	})
 	if err != nil {
 		return jobs.Job{}, err
@@ -262,7 +264,7 @@ func (store *Store) Fail(ctx context.Context, request jobs.FailRequest) (jobs.Jo
 			return err
 		}
 		failed = storestate.Fail(job, request)
-		return put(buckets.jobs, []byte(failed.ID), failed)
+		return putTerminalAndPropagate(buckets, failed)
 	})
 	if err != nil {
 		return jobs.Job{}, err
@@ -292,7 +294,7 @@ func (store *Store) RequestCancel(ctx context.Context, id jobs.JobID, requestedA
 		if err != nil {
 			return err
 		}
-		return put(buckets.jobs, []byte(canceled.ID), canceled)
+		return putTerminalAndPropagate(buckets, canceled)
 	})
 	if err != nil {
 		return jobs.Job{}, err
@@ -326,7 +328,7 @@ func (store *Store) RecoverAttempt(ctx context.Context, request jobs.RecoverAtte
 		if err != nil {
 			return err
 		}
-		return put(buckets.jobs, []byte(recovered.ID), recovered)
+		return putTerminalAndPropagate(buckets, recovered)
 	})
 	if err != nil {
 		return jobs.Job{}, err
@@ -385,6 +387,147 @@ func (store *Store) ListRecoveryCandidates(ctx context.Context, observedAt time.
 	return candidates, nil
 }
 
+// PutSchedule creates or revision-fenced updates a durable schedule.
+func (store *Store) PutSchedule(ctx context.Context, schedule jobs.Schedule, expectedRevision uint64) (jobs.Schedule, error) {
+	if err := ctx.Err(); err != nil {
+		return jobs.Schedule{}, err
+	}
+	if err := storestate.ValidateSchedule(schedule); err != nil {
+		return jobs.Schedule{}, err
+	}
+	var stored jobs.Schedule
+	err := store.db.Update(func(tx *bbolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		buckets, err := checkedBuckets(tx)
+		if err != nil {
+			return err
+		}
+		value := buckets.schedules.Get([]byte(schedule.ID))
+		if value == nil {
+			if expectedRevision != 0 {
+				return jobs.ErrJobNotFound
+			}
+			schedule.Revision = 1
+		} else {
+			current, err := getSchedule(buckets.schedules, schedule.ID)
+			if err != nil {
+				return err
+			}
+			if expectedRevision == 0 {
+				return jobs.ErrJobExists
+			}
+			if current.Revision != expectedRevision {
+				return jobs.ErrStaleAttempt
+			}
+			schedule.Revision = current.Revision + 1
+		}
+		stored = storestate.CloneSchedule(schedule)
+		storestate.NormalizeScheduleTimes(&stored)
+		return put(buckets.schedules, []byte(stored.ID), stored)
+	})
+	if err != nil {
+		return jobs.Schedule{}, err
+	}
+	return storestate.CloneSchedule(stored), nil
+}
+
+// GetSchedule returns an independently owned schedule snapshot.
+func (store *Store) GetSchedule(ctx context.Context, id jobs.ScheduleID) (jobs.Schedule, error) {
+	if err := ctx.Err(); err != nil {
+		return jobs.Schedule{}, err
+	}
+	var schedule jobs.Schedule
+	err := store.db.View(func(tx *bbolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		buckets, err := checkedBuckets(tx)
+		if err != nil {
+			return err
+		}
+		schedule, err = getSchedule(buckets.schedules, id)
+		return err
+	})
+	if err != nil {
+		return jobs.Schedule{}, err
+	}
+	return storestate.CloneSchedule(schedule), nil
+}
+
+// ListDueSchedules returns enabled due schedules in deterministic order.
+func (store *Store) ListDueSchedules(ctx context.Context, now time.Time, limit int) ([]jobs.Schedule, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	var due []jobs.Schedule
+	err := store.db.View(func(tx *bbolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		buckets, err := checkedBuckets(tx)
+		if err != nil {
+			return err
+		}
+		if limit <= 0 {
+			due = []jobs.Schedule{}
+			return nil
+		}
+		now = storestate.PersistedTime(now)
+		return buckets.schedules.ForEach(func(_, value []byte) error {
+			var schedule jobs.Schedule
+			if err := decode(bytes.Clone(value), &schedule); err != nil {
+				return err
+			}
+			storestate.NormalizeScheduleTimes(&schedule)
+			if schedule.Enabled && !schedule.NextRunAt.After(now) {
+				due = append(due, storestate.CloneSchedule(schedule))
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	storestate.SortSchedules(due)
+	if limit > 0 && len(due) > limit {
+		due = due[:limit]
+	}
+	return due, nil
+}
+
+// AdvanceSchedule moves a schedule cursor using its current revision fence.
+func (store *Store) AdvanceSchedule(ctx context.Context, id jobs.ScheduleID, expectedRevision uint64, nextRunAt time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return store.db.Update(func(tx *bbolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		buckets, err := checkedBuckets(tx)
+		if err != nil {
+			return err
+		}
+		schedule, err := getSchedule(buckets.schedules, id)
+		if err != nil {
+			return err
+		}
+		if schedule.Revision != expectedRevision {
+			return jobs.ErrStaleAttempt
+		}
+		nextRunAt = storestate.PersistedTime(nextRunAt)
+		if !nextRunAt.IsZero() && !nextRunAt.After(schedule.NextRunAt) {
+			return jobs.ErrInvalidTransition
+		}
+		schedule.NextRunAt = nextRunAt
+		schedule.Enabled = !nextRunAt.IsZero()
+		schedule.Revision++
+		return put(buckets.schedules, []byte(schedule.ID), schedule)
+	})
+}
+
 func currentAttempt(buckets bucketSet, id jobs.AttemptID, token coordination.FencingToken) (jobs.Attempt, jobs.Job, error) {
 	attempt, err := getAttempt(buckets.attempts, id)
 	if err != nil {
@@ -412,7 +555,7 @@ func needsInitialization(path string) (bool, error) {
 }
 
 func initializeBuckets(tx *bbolt.Tx) error {
-	for _, name := range [][]byte{jobsBucket, attemptsBucket, metaBucket} {
+	for _, name := range [][]byte{jobsBucket, attemptsBucket, schedulesBucket, metaBucket} {
 		if _, err := tx.CreateBucket(name); err != nil {
 			return err
 		}
@@ -422,11 +565,12 @@ func initializeBuckets(tx *bbolt.Tx) error {
 
 func checkedBuckets(tx *bbolt.Tx) (bucketSet, error) {
 	buckets := bucketSet{
-		jobs:     tx.Bucket(jobsBucket),
-		attempts: tx.Bucket(attemptsBucket),
-		meta:     tx.Bucket(metaBucket),
+		jobs:      tx.Bucket(jobsBucket),
+		attempts:  tx.Bucket(attemptsBucket),
+		schedules: tx.Bucket(schedulesBucket),
+		meta:      tx.Bucket(metaBucket),
 	}
-	if buckets.jobs == nil || buckets.attempts == nil || buckets.meta == nil {
+	if buckets.jobs == nil || buckets.attempts == nil || buckets.schedules == nil || buckets.meta == nil {
 		return bucketSet{}, ErrUnsupportedFormat
 	}
 	return buckets, nil
@@ -456,6 +600,19 @@ func getAttempt(bucket *bbolt.Bucket, id jobs.AttemptID) (jobs.Attempt, error) {
 	}
 	storestate.NormalizeAttemptTimes(&attempt)
 	return attempt, nil
+}
+
+func getSchedule(bucket *bbolt.Bucket, id jobs.ScheduleID) (jobs.Schedule, error) {
+	value := bytes.Clone(bucket.Get([]byte(id)))
+	if value == nil {
+		return jobs.Schedule{}, jobs.ErrJobNotFound
+	}
+	var schedule jobs.Schedule
+	if err := decode(value, &schedule); err != nil {
+		return jobs.Schedule{}, err
+	}
+	storestate.NormalizeScheduleTimes(&schedule)
+	return schedule, nil
 }
 
 func allJobs(bucket *bbolt.Bucket) (map[jobs.JobID]jobs.Job, error) {
@@ -492,4 +649,24 @@ func put(bucket *bbolt.Bucket, key []byte, value any) error {
 	return bucket.Put(key, encoded)
 }
 
+func putTerminalAndPropagate(buckets bucketSet, terminal jobs.Job) error {
+	if err := put(buckets.jobs, []byte(terminal.ID), terminal); err != nil {
+		return err
+	}
+	if terminal.State != jobs.StateFailed && terminal.State != jobs.StateCanceled {
+		return nil
+	}
+	all, err := allJobs(buckets.jobs)
+	if err != nil {
+		return err
+	}
+	for _, id := range storestate.PropagateDependencyFailures(all, terminal.UpdatedAt) {
+		if err := put(buckets.jobs, []byte(id), all[id]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 var _ jobs.Store = (*Store)(nil)
+var _ jobs.ScheduleStore = (*Store)(nil)
