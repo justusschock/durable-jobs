@@ -1,7 +1,10 @@
 package jobs_test
 
 import (
+	"bufio"
+	"bytes"
 	"os"
+	"os/exec"
 	"regexp"
 	"strings"
 	"testing"
@@ -34,6 +37,29 @@ func TestModuleCompatibilityPolicy(t *testing.T) {
 		if match[1] != "v0.2.0" {
 			t.Errorf("private dependency %q is not pinned to v0.2.0", match[0])
 		}
+	}
+}
+
+func TestPrivateModuleGraphPolicy(t *testing.T) {
+	command := exec.Command("go", "list", "-m", "all")
+	command.Env = append(os.Environ(), "GOWORK=off")
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("go list -m all: %v", err)
+	}
+
+	scanner := bufio.NewScanner(bytes.NewReader(output))
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 2 || !strings.HasPrefix(fields[0], "github.com/justusschock/go-") {
+			continue
+		}
+		if fields[1] != "v0.2.0" {
+			t.Errorf("resolved private module %s has version %s, want v0.2.0", fields[0], fields[1])
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -75,6 +101,8 @@ func TestCICompatibilityPolicy(t *testing.T) {
 		"GOPRIVATE: github.com/justusschock/*",
 		"GONOSUMDB: github.com/justusschock/*",
 		"go mod verify",
+		"go list -m all",
+		"private modules must resolve at v0.2.0",
 		"go mod tidy",
 		"git diff --exit-code -- go.mod go.sum",
 		"go vet ./...",
