@@ -6,6 +6,8 @@ github.com/justusschock/go-distributed-coordination v0.2.0 h1:AFi0VTt9s5F5ynNkUM
 github.com/justusschock/go-distributed-coordination v0.2.0/go.mod h1:iJZpHUN5md+Kc0FmPs8zrLu6KPb9XSYXdL1MRQVp5Nk=
 github.com/justusschock/go-messaging v0.2.0 h1:Tx5qrB0McSkZ5XI34l0eO9Mhc7OzSfT38NFuYKQyXdU=
 github.com/justusschock/go-messaging v0.2.0/go.mod h1:Z31aRR3qMChE4AHGFn7543DOaTWJsj3qRx/LoSiaXqM=
+github.com/justusschock/go-reconciliation v0.2.0 h1:0Wf1vsDbywkFWM1kYpLHDMaMhpPxVNXJRfpZi8qMIhE=
+github.com/justusschock/go-reconciliation v0.2.0/go.mod h1:sN52k+PVw1jgD9/5aw6fCzTbOdzudX+PllX+eqbHoYg=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/stretchr/testify v1.8.1 h1:w7B6lhMri9wdJUVmEZPGGhZzrYTPvgJArz7wNPgYKsk=

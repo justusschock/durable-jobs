@@ -5,6 +5,7 @@ go 1.22
 require (
 	github.com/justusschock/go-distributed-coordination v0.2.0
 	github.com/justusschock/go-messaging v0.2.0
+	github.com/justusschock/go-reconciliation v0.2.0
 	go.etcd.io/bbolt v1.3.11
 )
 
