@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"reflect"
 	"time"
 
 	coordination "github.com/justusschock/go-distributed-coordination"
@@ -108,7 +107,7 @@ func (worker *Worker) claimAndExecute(ctx context.Context, queue Queue) (bool, e
 		WorkerID:          worker.options.WorkerID,
 		Now:               now,
 		HeartbeatDeadline: now.Add(worker.options.LeaseTTL),
-		FencingToken:      worker.claimFence(claimLease),
+		FencingToken:      claimLease.Info().Token,
 	})
 	releaseErr := claimLease.Release(context.Background())
 	if claimErr != nil {
@@ -121,27 +120,6 @@ func (worker *Worker) claimAndExecute(ctx context.Context, queue Queue) (bool, e
 		return false, releaseErr
 	}
 	return true, worker.executeAttempt(ctx, attempt)
-}
-
-func (worker *Worker) claimFence(lease coordination.Lease) coordination.FencingToken {
-	token := lease.Info().Token
-	value := reflect.ValueOf(worker.store)
-	if value.Kind() != reflect.Pointer || value.IsNil() {
-		return token
-	}
-	value = value.Elem()
-	if value.Kind() != reflect.Struct {
-		return token
-	}
-	attempt := value.FieldByName("claimAttempt")
-	if !attempt.IsValid() || attempt.Kind() != reflect.Struct {
-		return token
-	}
-	fence := attempt.FieldByName("FencingToken")
-	if !fence.IsValid() || fence.Kind() != reflect.Uint64 || fence.Uint() == 0 {
-		return token
-	}
-	return coordination.FencingToken(fence.Uint())
 }
 
 func (worker *Worker) executeAttempt(ctx context.Context, attempt Attempt) error {
@@ -274,7 +252,11 @@ func (worker *Worker) complete(ctx context.Context, attempt Attempt, result Resu
 	if err != nil {
 		return err
 	}
-	return worker.publish(ctx, Event{Kind: EventSucceeded, JobID: job.ID, AttemptID: attempt.ID, Queue: job.Queue, At: now})
+	kind := EventSucceeded
+	if job.State == StateCanceled {
+		kind = EventCanceled
+	}
+	return worker.publish(ctx, Event{Kind: kind, JobID: job.ID, AttemptID: attempt.ID, Queue: job.Queue, At: now})
 }
 
 func (worker *Worker) fail(ctx context.Context, attempt Attempt, failure Failure) error {
