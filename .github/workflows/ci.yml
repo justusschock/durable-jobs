@@ -53,6 +53,17 @@ jobs:
       - name: Verify modules
         run: go mod verify
 
+      - name: Verify private module versions
+        shell: bash
+        run: |
+          go list -m all | awk '
+            NF >= 2 && $1 ~ /^github\.com\/justusschock\/go-/ && $2 != "v0.2.0" {
+              print "private modules must resolve at v0.2.0: " $0 > "/dev/stderr"
+              failed = 1
+            }
+            END { exit failed }
+          '
+
       - name: Verify tidy state
         run: |
           go mod tidy
