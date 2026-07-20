@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	messaging "github.com/justusschock/go-messaging"
 )
@@ -23,16 +24,29 @@ type DurableClient struct {
 
 // NewClient constructs a durable job client.
 func NewClient(store Store, publisher messaging.Publisher[Wakeup], clock Clock) (*DurableClient, error) {
-	if store == nil {
+	if isNilDependency(store) {
 		return nil, fmt.Errorf("%w: nil store", ErrInvalidJob)
 	}
-	if publisher == nil {
+	if isNilDependency(publisher) {
 		return nil, fmt.Errorf("%w: nil publisher", ErrInvalidJob)
 	}
-	if clock == nil {
+	if isNilDependency(clock) {
 		return nil, fmt.Errorf("%w: nil clock", ErrInvalidJob)
 	}
 	return &DurableClient{store: store, publisher: publisher, clock: clock}, nil
+}
+
+func isNilDependency(dependency any) bool {
+	if dependency == nil {
+		return true
+	}
+	value := reflect.ValueOf(dependency)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 // Enqueue validates and durably creates a pending job before publishing a wakeup.
