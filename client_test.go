@@ -113,7 +113,7 @@ func TestClientEnqueueValidatesBeforeCreateAndPublish(t *testing.T) {
 	if !errors.Is(err, jobs.ErrInvalidJob) {
 		t.Fatalf("Enqueue() error = %v, want ErrInvalidJob", err)
 	}
-	if job != (jobs.Job{}) {
+	if !reflect.DeepEqual(job, jobs.Job{}) {
 		t.Fatalf("Enqueue() job = %#v, want zero value", job)
 	}
 	if store.createCalls != 0 {
