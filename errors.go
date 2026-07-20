@@ -10,4 +10,5 @@ var (
 	ErrStaleAttempt      = errors.New("durable jobs: stale attempt")
 	ErrInvalidTransition = errors.New("durable jobs: invalid transition")
 	ErrDependencyFailed  = errors.New("durable jobs: dependency failed")
+	ErrWakeupPublish     = errors.New("durable jobs: wakeup publish")
 )
