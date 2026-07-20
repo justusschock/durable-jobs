@@ -223,3 +223,37 @@ func TestOpenRejectsIncompleteSchema(t *testing.T) {
 		t.Error(err)
 	}
 }
+
+func TestBoltRejectsUnknownEnvelopeVersion(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "jobs.db")
+	store, err := boltjobs.Open(path, boltjobs.Options{Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := bbolt.Open(path, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Update(func(tx *bbolt.Tx) error {
+		return tx.Bucket([]byte("jobs")).Put([]byte("job-1"), []byte(`{"version":2,"payload":{}}`))
+	}); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = boltjobs.Open(path, boltjobs.Options{Timeout: time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if _, err := store.Get(context.Background(), "job-1"); !errors.Is(err, boltjobs.ErrUnsupportedFormat) {
+		t.Fatalf("Get() error = %v, want ErrUnsupportedFormat", err)
+	}
+}
