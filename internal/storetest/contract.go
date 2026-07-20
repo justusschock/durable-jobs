@@ -390,6 +390,56 @@ func Run(t *testing.T, factory func(t *testing.T) jobs.Store) {
 			t.Fatalf("ClaimReady() after dependency succeeds = %q, want dependent", claimed.Job.ID)
 		}
 	})
+
+	t.Run("terminal dependency failure propagates", func(t *testing.T) {
+		store := factory(t)
+		parent := newJob("parent", "queue", now(0))
+		child := newJob("child", "queue", now(0))
+		child.DependsOn = []jobs.JobID{"parent"}
+		grandchild := newJob("grandchild", "queue", now(0))
+		grandchild.DependsOn = []jobs.JobID{"child"}
+		create(t, store, parent)
+		create(t, store, child)
+		create(t, store, grandchild)
+
+		attempt := claimOne(t, store, "queue", now(1), 9)
+		if attempt.Job.ID != "parent" {
+			t.Fatalf("ClaimReady() job = %q, want parent", attempt.Job.ID)
+		}
+		if _, err := store.Fail(context.Background(), jobs.FailRequest{
+			AttemptID: attempt.ID, FencingToken: 9,
+			Failure:  jobs.Failure{Code: "permanent", Retryable: false},
+			FailedAt: now(2),
+		}); err != nil {
+			t.Fatalf("Fail(parent) error = %v", err)
+		}
+		for _, id := range []jobs.JobID{"child", "grandchild"} {
+			dependent := get(t, store, id)
+			if dependent.State != jobs.StateFailed || dependent.LastFailure == nil || dependent.LastFailure.Code != "dependency_failed" {
+				t.Fatalf("dependent %q = %#v, want dependency_failed terminal state", id, dependent)
+			}
+			if !dependent.UpdatedAt.Equal(now(2)) {
+				t.Fatalf("dependent %q UpdatedAt = %v, want %v", id, dependent.UpdatedAt, now(2))
+			}
+		}
+	})
+
+	t.Run("terminal dependency cancellation propagates", func(t *testing.T) {
+		store := factory(t)
+		parent := newJob("cancel-parent", "queue", now(0))
+		child := newJob("cancel-child", "queue", now(0))
+		child.DependsOn = []jobs.JobID{"cancel-parent"}
+		create(t, store, parent)
+		create(t, store, child)
+
+		if _, err := store.RequestCancel(context.Background(), parent.ID, now(3)); err != nil {
+			t.Fatalf("RequestCancel(parent) error = %v", err)
+		}
+		dependent := get(t, store, child.ID)
+		if dependent.State != jobs.StateFailed || dependent.LastFailure == nil || dependent.LastFailure.Code != "dependency_failed" || !dependent.UpdatedAt.Equal(now(3)) {
+			t.Fatalf("canceled dependent = %#v, want dependency_failed at %v", dependent, now(3))
+		}
+	})
 }
 
 func newJob(id jobs.JobID, queue jobs.Queue, availableAt time.Time) jobs.Job {
