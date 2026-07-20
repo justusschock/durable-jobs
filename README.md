@@ -1,54 +1,111 @@
 # go-durable-jobs
 
-Durable job scheduling, execution, recovery, and workflow primitives for Go.
+`go-durable-jobs` provides durable job primitives for Go:
+atomic queue claims, fenced execution attempts, heartbeats, retries,
+cancellation, crash recovery, one-shot and fixed-interval schedules, dependency
+workflows, and typed lifecycle events.
 
-> **Status:** Initial repository scaffold; the public API has not been implemented yet.
+The module includes a mutex-backed memory store for tests and local use and a
+crash-safe bbolt store for persistent workloads. Public job payloads, results,
+headers, schedules, and dependency lists are independently owned snapshots.
 
 Module path: `github.com/justusschock/go-durable-jobs`
 
-## Scope
+## Install the private module
 
-Persistent jobs, queues, attempts, heartbeats, retries, cancellation, workers, schedules, and recovery built on reconciliation and coordination.
+Version `v0.2.0` requires Go 1.22 or newer. Every private sibling dependency is
+pinned to `v0.2.0`.
 
-This library is private and intended for reuse by future Go projects.
+You need access to this repository and its private dependencies. Configure a
+Git credential helper or SSH agent; do not place access tokens in Git URLs,
+source files, `go env`, or shell history. GitHub CLI can configure Git's
+credential helper after browser authentication:
 
-## Target platform dependencies
+```bash
+gh auth login --hostname github.com --git-protocol https --web
+gh auth setup-git --hostname github.com
+```
 
-Required imports:
+Tell Go that the module family is private, then install this release:
 
-- [`go-reconciliation`](https://github.com/justusschock/go-reconciliation)
-- [`go-distributed-coordination`](https://github.com/justusschock/go-distributed-coordination)
-- [`go-messaging`](https://github.com/justusschock/go-messaging)
+```bash
+go env -w GOPRIVATE='github.com/justusschock/*'
+go env -w GONOSUMDB='github.com/justusschock/*'
+go get github.com/justusschock/go-durable-jobs@v0.2.0
+```
 
-Optional adapter imports:
+## Core flow
 
-None currently planned.
+Create a `DurableClient` with a `Store`, a typed wakeup publisher, and a
+deterministic `Clock`. `Enqueue` validates and persists the job before it
+publishes a queue wakeup. A publish failure never erases the durable job.
 
-Optional integrations must remain one-way: concrete adapters import their neutral contracts, never the reverse.
+Workers use `go-distributed-coordination` leases to obtain fencing tokens.
+Every heartbeat, completion, failure, and recovery operation checks the current
+attempt and token atomically in the store. Handler inputs and outputs are
+cloned, and losing a lease prevents a stale worker from committing a result.
 
-## Design constraints
+Use `NewRecoveryEngine` for deterministic recovery of expired attempts through
+`go-reconciliation`. The recovery action retains the observed attempt ID,
+fencing token, and heartbeat deadline, so a later heartbeat invalidates a stale
+recovery plan.
 
-- Keep public contracts independent of product-specific resource types.
-- Keep the dependency graph acyclic; imports point toward lower-level mechanisms.
-- Put generic lifecycle transfer in `go-lifecycle/handoff` and finite resource-right transfer in `go-resources/handoff`.
-- Use `go-cache` only for reconstructible, disposable state, never correctness-critical state.
+## Schedules and workflows
+
+Both included stores implement `ScheduleStore`. A zero interval creates a
+one-shot schedule; a positive interval creates a fixed-interval schedule.
+`Scheduler.RunDue` uses occurrence IDs of the form
+`<schedule-id>/<due-unix-nano>`, making a crash between enqueue and cursor
+advance idempotent. Missed intervals advance from the prior due time to the
+first time strictly after the scheduler clock.
+
+Jobs may name prerequisite job IDs in `DependsOn`. A job becomes claimable only
+after every dependency succeeds. Failed or canceled dependencies atomically and
+transitively fail pending dependents with the `dependency_failed` code.
+`ValidateDependencies` rejects missing or already failed prerequisites before a
+caller submits a workflow job.
+
+## Executable examples
+
+The repository contains complete, compile-checked examples:
+
+- [`ExampleDurableClient`](example_test.go) enqueues and reads a durable job.
+- [`ExampleScheduler`](example_test.go) persists and runs a fixed-interval
+  schedule occurrence.
+
+Run them directly:
+
+```bash
+go test -run '^ExampleDurableClient$' .
+go test -run '^ExampleScheduler$' .
+```
+
+## Dependency boundaries
+
+The core module is independent of product resource schemas, caches, and
+object storage. Its direct platform dependencies are:
+
+- `go-distributed-coordination v0.2.0`
+- `go-messaging v0.2.0`
+- `go-reconciliation v0.2.0`
+- `bbolt v1.3.11`
+
+Optional integrations must remain one-way: concrete adapters import these
+neutral contracts, never the reverse.
 
 ## Development
 
-Install and run the repository hooks:
+Run the repository gates with a standalone module context:
 
 ```bash
-pre-commit install
+GOWORK=off go mod verify
+GOWORK=off go test -race ./...
+GOWORK=off go vet ./...
 pre-commit run --all-files
 ```
 
-Once the module implementation exists, run its Go checks with:
-
-```bash
-go test ./...
-```
-
-Local implementation plans live under `docs/` and are intentionally excluded from Git.
+Implementation plans live under `docs/` and are intentionally excluded from
+Git. They must never be committed.
 
 ## License
 
