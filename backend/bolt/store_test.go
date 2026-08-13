@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 	"time"
 
@@ -136,6 +137,64 @@ func TestDatabaseFileMode(t *testing.T) {
 	}
 }
 
+func TestOpenRejectsDatabaseSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.db")
+	store, err := boltjobs.Open(target, boltjobs.Options{Timeout: time.Second})
+	if err != nil {
+		t.Fatalf("Open() target error = %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() target error = %v", err)
+	}
+
+	link := filepath.Join(dir, "jobs.db")
+	symlinkOrSkip(t, target, link)
+
+	store, err = boltjobs.Open(link, boltjobs.Options{Timeout: time.Second})
+	if err == nil {
+		if store != nil {
+			_ = store.Close()
+		}
+		t.Fatal("Open() symlink error = nil, want an error")
+	}
+}
+
+func TestOpenRejectsSymlinkParent(t *testing.T) {
+	dir := t.TempDir()
+	targetParent := filepath.Join(dir, "target")
+	if err := os.Mkdir(targetParent, 0o755); err != nil {
+		t.Fatalf("Mkdir() target parent error = %v", err)
+	}
+
+	linkParent := filepath.Join(dir, "link")
+	symlinkOrSkip(t, targetParent, linkParent)
+
+	store, err := boltjobs.Open(filepath.Join(linkParent, "jobs.db"), boltjobs.Options{Timeout: time.Second})
+	if err == nil {
+		if store != nil {
+			_ = store.Close()
+		}
+		t.Fatal("Open() symlink parent error = nil, want an error")
+	}
+}
+
+func TestOpenRejectsNonDirectoryParent(t *testing.T) {
+	dir := t.TempDir()
+	parent := filepath.Join(dir, "parent")
+	if err := os.WriteFile(parent, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("WriteFile() parent fixture error = %v", err)
+	}
+
+	store, err := boltjobs.Open(filepath.Join(parent, "jobs.db"), boltjobs.Options{Timeout: time.Second})
+	if err == nil {
+		if store != nil {
+			_ = store.Close()
+		}
+		t.Fatal("Open() non-directory parent error = nil, want an error")
+	}
+}
+
 func TestOpenValidation(t *testing.T) {
 	t.Run("empty path", func(t *testing.T) {
 		store, err := boltjobs.Open("", boltjobs.Options{})
@@ -255,5 +314,15 @@ func TestBoltRejectsUnknownEnvelopeVersion(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	if _, err := store.Get(context.Background(), "job-1"); !errors.Is(err, boltjobs.ErrUnsupportedFormat) {
 		t.Fatalf("Get() error = %v, want ErrUnsupportedFormat", err)
+	}
+}
+
+func symlinkOrSkip(t *testing.T, oldname, newname string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation requires privileges on many Windows systems")
+	}
+	if err := os.Symlink(oldname, newname); err != nil {
+		t.Skipf("Symlink() unavailable: %v", err)
 	}
 }

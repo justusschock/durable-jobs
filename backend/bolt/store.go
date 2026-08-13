@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	coordination "github.com/justusschock/go-distributed-coordination"
@@ -544,7 +545,10 @@ func currentAttempt(buckets bucketSet, id jobs.AttemptID, token coordination.Fen
 }
 
 func needsInitialization(path string) (bool, error) {
-	info, err := os.Stat(path)
+	if err := validateSafePath(path); err != nil {
+		return false, err
+	}
+	info, err := os.Lstat(path)
 	if err == nil {
 		return info.Size() == 0, nil
 	}
@@ -552,6 +556,37 @@ func needsInitialization(path string) (bool, error) {
 		return true, nil
 	}
 	return false, err
+}
+
+func validateSafePath(path string) error {
+	parent := filepath.Dir(path)
+	if parent != "." {
+		info, err := os.Lstat(parent)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("durable jobs bolt: database parent %q is a symlink", parent)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("durable jobs bolt: database parent %q is not a directory", parent)
+		}
+	}
+
+	info, err := os.Lstat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("durable jobs bolt: database path %q is a symlink", path)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("durable jobs bolt: database path %q is not a regular file", path)
+	}
+	return nil
 }
 
 func initializeBuckets(tx *bbolt.Tx) error {
