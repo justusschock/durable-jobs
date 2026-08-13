@@ -68,6 +68,356 @@ func TestWorkerConstructorRejectsNilAndInvalidOptions(t *testing.T) {
 	}
 }
 
+func TestWorkerRunOneReturnsFalseWhenNoJobIsReady(t *testing.T) {
+	t.Parallel()
+
+	store := newWorkerStore()
+	store.claimed = true
+	backend := newWorkerBackend()
+	worker := mustNewWorker(
+		t,
+		store,
+		backend,
+		&workerEventPublisher{},
+		newWorkerRegistry(t, "send-email", func(context.Context, jobs.Job) (jobs.Result, error) {
+			t.Fatal("handler called without a ready job")
+			return jobs.Result{}, nil
+		}),
+		validWorkerOptions(workerClock{now: time.Unix(100, 0)}),
+	)
+
+	claimed, err := worker.RunOne(context.Background())
+	if err != nil {
+		t.Fatalf("RunOne() error = %v", err)
+	}
+	if claimed {
+		t.Fatal("RunOne() claimed = true, want false")
+	}
+	if len(store.claimRequests) != 1 {
+		t.Fatalf("ClaimReady() calls = %d, want 1", len(store.claimRequests))
+	}
+	if len(backend.acquireRequests) != 1 || backend.acquireRequests[0].Key != "jobs/queue/default/claim" {
+		t.Fatalf("Acquire() requests = %#v, want only the default queue claim", backend.acquireRequests)
+	}
+	if len(backend.leases) != 1 || !backend.leases[0].released {
+		t.Fatal("queue claim lease was not released after no ready job")
+	}
+}
+
+func TestWorkerRunOneUsesQueueOrderAndExecutesAtMostOneJob(t *testing.T) {
+	t.Parallel()
+
+	store := newWorkerStore()
+	store.claimAttempts = map[jobs.Queue][]jobs.Attempt{
+		"third": {
+			workerAttemptInQueue("third-1", "third", 1),
+			workerAttemptInQueue("third-2", "third", 2),
+		},
+		"fourth": {workerAttemptInQueue("fourth-1", "fourth", 3)},
+	}
+	backend := newWorkerBackend()
+	backend.acquireErrors = map[int]error{0: coordination.ErrNotAcquired}
+	var handled []jobs.JobID
+	registry := newWorkerRegistry(t, "send-email", func(_ context.Context, job jobs.Job) (jobs.Result, error) {
+		handled = append(handled, job.ID)
+		return jobs.Result{}, nil
+	})
+	options := validWorkerOptions(workerClock{now: time.Unix(100, 0)})
+	options.Queues = []jobs.Queue{"first", "second", "third", "fourth"}
+	options.PollInterval = time.Hour
+	options.ClaimLimit = 10
+	worker := mustNewWorker(t, store, backend, &workerEventPublisher{}, registry, options)
+
+	claimed, err := worker.RunOne(context.Background())
+	if err != nil {
+		t.Fatalf("RunOne() error = %v", err)
+	}
+	if !claimed {
+		t.Fatal("RunOne() claimed = false, want true")
+	}
+	if len(store.claimRequests) != 2 || store.claimRequests[0].Queue != "second" || store.claimRequests[1].Queue != "third" {
+		t.Fatalf("ClaimReady() queue order = %#v, want second then third after first-queue lease contention", store.claimRequests)
+	}
+	if len(handled) != 1 || handled[0] != "third-1" {
+		t.Fatalf("handled jobs = %v, want only third-1", handled)
+	}
+	if remaining := len(store.claimAttempts["third"]); remaining != 1 {
+		t.Fatalf("remaining third-queue jobs = %d, want 1", remaining)
+	}
+	if remaining := len(store.claimAttempts["fourth"]); remaining != 1 {
+		t.Fatalf("remaining fourth-queue jobs = %d, want 1", remaining)
+	}
+}
+
+func TestWorkerRunOneRejectsCanceledContextBeforeClaiming(t *testing.T) {
+	t.Parallel()
+
+	store := newWorkerStore()
+	backend := newWorkerBackend()
+	worker := mustNewWorker(
+		t,
+		store,
+		backend,
+		&workerEventPublisher{},
+		newWorkerRegistry(t, "send-email", func(context.Context, jobs.Job) (jobs.Result, error) {
+			t.Fatal("handler called for canceled context")
+			return jobs.Result{}, nil
+		}),
+		validWorkerOptions(workerClock{now: time.Unix(100, 0)}),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	claimed, err := worker.RunOne(ctx)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("RunOne() error = %v, want context.Canceled", err)
+	}
+	if claimed {
+		t.Fatal("RunOne() claimed = true, want false")
+	}
+	if len(backend.acquireRequests) != 0 || len(store.claimRequests) != 0 {
+		t.Fatalf("canceled RunOne() acquired=%d claimed=%d, want no calls", len(backend.acquireRequests), len(store.claimRequests))
+	}
+}
+
+func TestWorkerRunOneHandlesSuccessErrorAndPanic(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		handler       jobs.Handler
+		wantComplete  int
+		wantFail      int
+		wantCode      string
+		wantRetryable bool
+	}{
+		{
+			name: "success",
+			handler: func(context.Context, jobs.Job) (jobs.Result, error) {
+				return jobs.Result{Payload: []byte("ok")}, nil
+			},
+			wantComplete: 1,
+		},
+		{
+			name: "error",
+			handler: func(context.Context, jobs.Job) (jobs.Result, error) {
+				return jobs.Result{}, errors.New("temporary failure")
+			},
+			wantFail:      1,
+			wantCode:      "handler_error",
+			wantRetryable: true,
+		},
+		{
+			name: "panic",
+			handler: func(context.Context, jobs.Job) (jobs.Result, error) {
+				panic("boom")
+			},
+			wantFail: 1,
+			wantCode: "handler_panic",
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newWorkerStore()
+			worker := mustNewWorker(
+				t,
+				store,
+				newWorkerBackend(),
+				&workerEventPublisher{},
+				newWorkerRegistry(t, "send-email", test.handler),
+				validWorkerOptions(workerClock{now: time.Unix(100, 0)}),
+			)
+
+			claimed, err := worker.RunOne(context.Background())
+			if err != nil {
+				t.Fatalf("RunOne() error = %v", err)
+			}
+			if !claimed {
+				t.Fatal("RunOne() claimed = false, want true")
+			}
+			if len(store.completeRequests) != test.wantComplete || len(store.failRequests) != test.wantFail {
+				t.Fatalf("terminal calls: complete=%d fail=%d, want complete=%d fail=%d", len(store.completeRequests), len(store.failRequests), test.wantComplete, test.wantFail)
+			}
+			if test.wantFail != 0 {
+				failure := store.failRequests[0].Failure
+				if failure.Code != test.wantCode || failure.Retryable != test.wantRetryable {
+					t.Fatalf("failure = %#v, want code=%q retryable=%t", failure, test.wantCode, test.wantRetryable)
+				}
+			}
+		})
+	}
+}
+
+func TestWorkerRunOneHeartbeatsAndReleasesExecutionLease(t *testing.T) {
+	t.Parallel()
+
+	store := newWorkerStore()
+	backend := newWorkerBackend()
+	handlerStarted := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	registry := newWorkerRegistry(t, "send-email", func(context.Context, jobs.Job) (jobs.Result, error) {
+		close(handlerStarted)
+		<-releaseHandler
+		return jobs.Result{}, nil
+	})
+	worker := mustNewWorker(t, store, backend, &workerEventPublisher{}, registry, validWorkerOptions(workerClock{now: time.Unix(100, 0)}))
+	type runOneResult struct {
+		claimed bool
+		err     error
+	}
+	done := make(chan runOneResult, 1)
+	go func() {
+		claimed, err := worker.RunOne(context.Background())
+		done <- runOneResult{claimed: claimed, err: err}
+	}()
+
+	receive(t, handlerStarted, "handler start")
+	heartbeat := receive(t, store.heartbeatCalls, "heartbeat")
+	close(releaseHandler)
+	result := receive(t, done, "RunOne result")
+	if result.err != nil || !result.claimed {
+		t.Fatalf("RunOne() = (%t, %v), want (true, nil)", result.claimed, result.err)
+	}
+	if heartbeat.FencingToken != store.claimRequests[0].FencingToken {
+		t.Fatalf("Heartbeat() fencing token = %d, want claim fence %d", heartbeat.FencingToken, store.claimRequests[0].FencingToken)
+	}
+	if len(backend.leases) != 2 || !backend.leases[1].released {
+		t.Fatal("job execution lease was not released")
+	}
+}
+
+func TestWorkerRunOneReportsClaimWhenExecutionAborts(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		abort func(context.CancelFunc, *workerBackend)
+	}{
+		{
+			name: "context canceled",
+			abort: func(cancel context.CancelFunc, _ *workerBackend) {
+				cancel()
+			},
+		},
+		{
+			name: "job lease lost",
+			abort: func(_ context.CancelFunc, backend *workerBackend) {
+				backend.leases[1].lose()
+			},
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newWorkerStore()
+			backend := newWorkerBackend()
+			handlerStarted := make(chan struct{})
+			handlerCanceled := make(chan struct{})
+			registry := newWorkerRegistry(t, "send-email", func(ctx context.Context, _ jobs.Job) (jobs.Result, error) {
+				close(handlerStarted)
+				<-ctx.Done()
+				close(handlerCanceled)
+				return jobs.Result{}, ctx.Err()
+			})
+			worker := mustNewWorker(t, store, backend, &workerEventPublisher{}, registry, validWorkerOptions(workerClock{now: time.Unix(100, 0)}))
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			type runOneResult struct {
+				claimed bool
+				err     error
+			}
+			done := make(chan runOneResult, 1)
+			go func() {
+				claimed, err := worker.RunOne(ctx)
+				done <- runOneResult{claimed: claimed, err: err}
+			}()
+
+			receive(t, handlerStarted, "handler start")
+			test.abort(cancel, backend)
+			receive(t, handlerCanceled, "handler cancellation")
+			result := receive(t, done, "RunOne result")
+			if result.err != nil || !result.claimed {
+				t.Fatalf("RunOne() = (%t, %v), want (true, nil)", result.claimed, result.err)
+			}
+			if len(store.completeRequests) != 0 || len(store.failRequests) != 0 {
+				t.Fatalf("terminal transitions after execution abort: complete=%d fail=%d", len(store.completeRequests), len(store.failRequests))
+			}
+		})
+	}
+}
+
+func TestWorkerRunOneReportsClaimAfterPostClaimError(t *testing.T) {
+	t.Parallel()
+
+	sentinel := errors.New("post-claim failure")
+	tests := []struct {
+		name      string
+		configure func(*workerStore, *workerBackend, *workerEventPublisher)
+	}{
+		{
+			name: "queue lease release",
+			configure: func(_ *workerStore, backend *workerBackend, _ *workerEventPublisher) {
+				backend.releaseErrors = map[int]error{0: sentinel}
+			},
+		},
+		{
+			name: "job lease acquire",
+			configure: func(_ *workerStore, backend *workerBackend, _ *workerEventPublisher) {
+				backend.acquireErrors = map[int]error{1: sentinel}
+			},
+		},
+		{
+			name: "terminal transition",
+			configure: func(store *workerStore, _ *workerBackend, _ *workerEventPublisher) {
+				store.completeErr = sentinel
+			},
+		},
+		{
+			name: "terminal event",
+			configure: func(_ *workerStore, _ *workerBackend, publisher *workerEventPublisher) {
+				publisher.publishErr = sentinel
+			},
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := newWorkerStore()
+			backend := newWorkerBackend()
+			publisher := &workerEventPublisher{}
+			test.configure(store, backend, publisher)
+			worker := mustNewWorker(
+				t,
+				store,
+				backend,
+				publisher,
+				newWorkerRegistry(t, "send-email", func(context.Context, jobs.Job) (jobs.Result, error) {
+					return jobs.Result{}, nil
+				}),
+				validWorkerOptions(workerClock{now: time.Unix(100, 0)}),
+			)
+
+			claimed, err := worker.RunOne(context.Background())
+			if !errors.Is(err, sentinel) {
+				t.Fatalf("RunOne() error = %v, want sentinel", err)
+			}
+			if !claimed {
+				t.Fatal("RunOne() claimed = false after durable claim, want true")
+			}
+		})
+	}
+}
+
 func TestWorkerSuccessfulHandlerCompletesWithClaimFenceAndReleasesQueueLease(t *testing.T) {
 	t.Parallel()
 
@@ -403,12 +753,20 @@ func workerAttempt(id jobs.JobID, token coordination.FencingToken) jobs.Attempt 
 	}
 }
 
+func workerAttemptInQueue(id jobs.JobID, queue jobs.Queue, token coordination.FencingToken) jobs.Attempt {
+	attempt := workerAttempt(id, token)
+	attempt.Job.Queue = queue
+	return attempt
+}
+
 type workerStore struct {
 	mu                sync.Mutex
 	claimAttempt      jobs.Attempt
+	claimAttempts     map[jobs.Queue][]jobs.Attempt
 	claimed           bool
 	getJob            jobs.Job
 	completeState     jobs.State
+	completeErr       error
 	claimRequests     []jobs.ClaimRequest
 	heartbeatRequests []jobs.HeartbeatRequest
 	completeRequests  []jobs.CompleteRequest
@@ -448,6 +806,17 @@ func (store *workerStore) ClaimReady(_ context.Context, request jobs.ClaimReques
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	store.claimRequests = append(store.claimRequests, request)
+	if store.claimAttempts != nil {
+		attempts := store.claimAttempts[request.Queue]
+		if len(attempts) == 0 {
+			return jobs.Attempt{}, jobs.ErrNoReadyJob
+		}
+		attempt := attempts[0]
+		store.claimAttempts[request.Queue] = attempts[1:]
+		attempt.FencingToken = request.FencingToken
+		store.getJob = attempt.Job
+		return attempt, nil
+	}
 	if store.claimed {
 		return jobs.Attempt{}, jobs.ErrNoReadyJob
 	}
@@ -469,6 +838,9 @@ func (store *workerStore) Complete(_ context.Context, request jobs.CompleteReque
 	store.mu.Lock()
 	defer store.mu.Unlock()
 	store.completeRequests = append(store.completeRequests, request)
+	if store.completeErr != nil {
+		return jobs.Job{}, store.completeErr
+	}
 	job := store.getJob.Clone()
 	job.State = store.completeState
 	if job.State == 0 {
@@ -510,6 +882,8 @@ type workerBackend struct {
 	nextToken       coordination.FencingToken
 	acquireRequests []coordination.AcquireRequest
 	leases          []*workerLease
+	acquireErrors   map[int]error
+	releaseErrors   map[int]error
 }
 
 func newWorkerBackend() *workerBackend {
@@ -519,6 +893,11 @@ func newWorkerBackend() *workerBackend {
 func (backend *workerBackend) Acquire(_ context.Context, request coordination.AcquireRequest) (coordination.Lease, error) {
 	backend.mu.Lock()
 	defer backend.mu.Unlock()
+	requestIndex := len(backend.acquireRequests)
+	backend.acquireRequests = append(backend.acquireRequests, request)
+	if err := backend.acquireErrors[requestIndex]; err != nil {
+		return nil, err
+	}
 	lease := newWorkerLease(coordination.LeaseInfo{
 		Key:        request.Key,
 		Owner:      request.Owner,
@@ -526,18 +905,19 @@ func (backend *workerBackend) Acquire(_ context.Context, request coordination.Ac
 		AcquiredAt: time.Unix(100, 0),
 		ExpiresAt:  time.Unix(100, 0).Add(request.TTL),
 	})
+	lease.releaseErr = backend.releaseErrors[requestIndex]
 	backend.nextToken++
-	backend.acquireRequests = append(backend.acquireRequests, request)
 	backend.leases = append(backend.leases, lease)
 	return lease, nil
 }
 
 type workerLease struct {
-	mu       sync.Mutex
-	info     coordination.LeaseInfo
-	done     chan struct{}
-	released bool
-	once     sync.Once
+	mu         sync.Mutex
+	info       coordination.LeaseInfo
+	done       chan struct{}
+	released   bool
+	releaseErr error
+	once       sync.Once
 }
 
 func newWorkerLease(info coordination.LeaseInfo) *workerLease {
@@ -561,8 +941,9 @@ func (lease *workerLease) Renew(context.Context, time.Duration) (coordination.Le
 func (lease *workerLease) Release(context.Context) error {
 	lease.mu.Lock()
 	lease.released = true
+	err := lease.releaseErr
 	lease.mu.Unlock()
-	return nil
+	return err
 }
 
 func (lease *workerLease) lose() {
@@ -572,8 +953,9 @@ func (lease *workerLease) lose() {
 }
 
 type workerEventPublisher struct {
-	mu        sync.Mutex
-	envelopes []messaging.Envelope[jobs.Event]
+	mu         sync.Mutex
+	envelopes  []messaging.Envelope[jobs.Event]
+	publishErr error
 }
 
 func (publisher *workerEventPublisher) kinds() []jobs.EventKind {
@@ -590,7 +972,7 @@ func (publisher *workerEventPublisher) Publish(_ context.Context, envelope messa
 	publisher.mu.Lock()
 	defer publisher.mu.Unlock()
 	publisher.envelopes = append(publisher.envelopes, envelope.Clone())
-	return nil
+	return publisher.publishErr
 }
 
 type workerClock struct {

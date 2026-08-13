@@ -87,6 +87,23 @@ func (worker *Worker) Run(ctx context.Context) error {
 	}
 }
 
+// RunOne scans the configured queues once in order and attempts to claim and
+// execute at most one job. It does not poll and ignores PollInterval and
+// ClaimLimit. The returned boolean reports whether ClaimReady succeeded,
+// including when execution returns an error or aborts after the durable claim.
+func (worker *Worker) RunOne(ctx context.Context) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	for _, queue := range worker.options.Queues {
+		claimed, err := worker.claimAndExecute(ctx, queue)
+		if claimed || err != nil {
+			return claimed, err
+		}
+	}
+	return false, nil
+}
+
 func (worker *Worker) claimAndExecute(ctx context.Context, queue Queue) (bool, error) {
 	claimLease, err := worker.backend.Acquire(ctx, coordination.AcquireRequest{
 		Key:   "jobs/queue/" + string(queue) + "/claim",
@@ -117,7 +134,7 @@ func (worker *Worker) claimAndExecute(ctx context.Context, queue Queue) (bool, e
 		return false, claimErr
 	}
 	if releaseErr != nil && ctx.Err() == nil {
-		return false, releaseErr
+		return true, releaseErr
 	}
 	return true, worker.executeAttempt(ctx, attempt)
 }
