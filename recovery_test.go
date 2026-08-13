@@ -287,6 +287,10 @@ func (store *recoveryStore) Get(context.Context, jobs.JobID) (jobs.Job, error) {
 	return jobs.Job{}, errors.New("unexpected Get")
 }
 
+func (store *recoveryStore) ListJobs(context.Context, jobs.ListJobsRequest) ([]jobs.Job, error) {
+	return nil, errors.New("unexpected ListJobs")
+}
+
 func (store *recoveryStore) ClaimReady(context.Context, jobs.ClaimRequest) (jobs.Attempt, error) {
 	return jobs.Attempt{}, errors.New("unexpected ClaimReady")
 }

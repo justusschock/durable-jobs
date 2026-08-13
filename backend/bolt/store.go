@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	coordination "github.com/justusschock/go-distributed-coordination"
@@ -130,6 +131,47 @@ func (store *Store) Get(ctx context.Context, id jobs.JobID) (jobs.Job, error) {
 		return jobs.Job{}, err
 	}
 	return storestate.CloneJob(job), nil
+}
+
+// ListJobs returns jobs for one queue in deterministic recent-first order.
+func (store *Store) ListJobs(ctx context.Context, request jobs.ListJobsRequest) ([]jobs.Job, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if request.Queue == "" || request.Limit <= 0 {
+		return nil, jobs.ErrInvalidJob
+	}
+	var listed []jobs.Job
+	err := store.db.View(func(tx *bbolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		buckets, err := checkedBuckets(tx)
+		if err != nil {
+			return err
+		}
+		all, err := allJobs(buckets.jobs)
+		if err != nil {
+			return err
+		}
+		listed = make([]jobs.Job, 0, min(len(all), request.Limit))
+		for _, job := range all {
+			if job.Queue == request.Queue {
+				listed = append(listed, storestate.CloneJob(job))
+			}
+		}
+		sort.Slice(listed, func(left, right int) bool {
+			return storestate.RecentFirst(listed[left], listed[right])
+		})
+		if len(listed) > request.Limit {
+			listed = listed[:request.Limit]
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return listed, nil
 }
 
 // ClaimReady atomically claims the highest-priority ready job in a queue.

@@ -440,6 +440,10 @@ func (store *workerStore) Get(context.Context, jobs.JobID) (jobs.Job, error) {
 	return store.getJob.Clone(), nil
 }
 
+func (store *workerStore) ListJobs(context.Context, jobs.ListJobsRequest) ([]jobs.Job, error) {
+	panic("ListJobs must not be called by Worker")
+}
+
 func (store *workerStore) ClaimReady(_ context.Context, request jobs.ClaimRequest) (jobs.Attempt, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()

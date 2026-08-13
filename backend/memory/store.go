@@ -4,6 +4,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -64,6 +65,34 @@ func (store *Store) Get(ctx context.Context, id jobs.JobID) (jobs.Job, error) {
 		return jobs.Job{}, jobs.ErrJobNotFound
 	}
 	return cloneJob(job), nil
+}
+
+// ListJobs returns jobs for one queue in deterministic recent-first order.
+func (store *Store) ListJobs(ctx context.Context, request jobs.ListJobsRequest) ([]jobs.Job, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if request.Queue == "" || request.Limit <= 0 {
+		return nil, jobs.ErrInvalidJob
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	listed := make([]jobs.Job, 0, min(len(store.jobs), request.Limit))
+	for _, job := range store.jobs {
+		if job.Queue == request.Queue {
+			listed = append(listed, cloneJob(job))
+		}
+	}
+	sort.Slice(listed, func(left, right int) bool {
+		return storestate.RecentFirst(listed[left], listed[right])
+	})
+	if len(listed) > request.Limit {
+		listed = listed[:request.Limit]
+	}
+	return listed, nil
 }
 
 // ClaimReady atomically claims the highest-priority ready job in a queue.

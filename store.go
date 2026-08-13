@@ -64,10 +64,17 @@ type RecoverAttemptRequest struct {
 	RecoveredAt       time.Time
 }
 
+// ListJobsRequest selects a bounded queue-scoped job snapshot.
+type ListJobsRequest struct {
+	Queue Queue
+	Limit int
+}
+
 // Store atomically persists durable jobs and their fenced execution attempts.
 type Store interface {
 	Create(context.Context, Job) (Job, error)
 	Get(context.Context, JobID) (Job, error)
+	ListJobs(context.Context, ListJobsRequest) ([]Job, error)
 	ClaimReady(context.Context, ClaimRequest) (Attempt, error)
 	Heartbeat(context.Context, HeartbeatRequest) error
 	Complete(context.Context, CompleteRequest) (Job, error)

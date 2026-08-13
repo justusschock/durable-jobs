@@ -78,6 +78,50 @@ func Run(t *testing.T, factory func(t *testing.T) jobs.Store) {
 		}
 	})
 
+	t.Run("list jobs filters orders bounds and clones", func(t *testing.T) {
+		store := factory(t)
+		create(t, store, newJob("old", "queue", now(0)))
+		create(t, store, newJob("other-queue", "other", now(0)))
+		create(t, store, newJob("tie-a", "queue", now(0)))
+		create(t, store, newJob("tie-b", "queue", now(0)))
+		running := claimOne(t, store, "queue", now(1), 1)
+		if running.Job.ID != "old" {
+			t.Fatalf("claimed job = %q, want old", running.Job.ID)
+		}
+		if _, err := store.Complete(context.Background(), jobs.CompleteRequest{
+			AttemptID: running.ID, FencingToken: 1, Result: jobs.Result{Payload: []byte("done")}, CompletedAt: now(2),
+		}); err != nil {
+			t.Fatalf("Complete() error = %v", err)
+		}
+
+		listed, err := store.ListJobs(context.Background(), jobs.ListJobsRequest{Queue: "queue", Limit: 2})
+		if err != nil {
+			t.Fatalf("ListJobs() error = %v", err)
+		}
+		if len(listed) != 2 || listed[0].ID != "old" || listed[1].ID != "tie-a" {
+			t.Fatalf("ListJobs() = %#v, want old then tie-a", listed)
+		}
+		if listed[0].State != jobs.StateSucceeded || string(listed[0].Result) != "done" {
+			t.Fatalf("ListJobs()[0] = %#v, want completed job", listed[0])
+		}
+		listed[0].Result[0] = 'x'
+		listed[1].Payload[0] = 'x'
+		if got := get(t, store, "old"); string(got.Result) != "done" {
+			t.Fatalf("ListJobs() returned aliased result: %#v", got)
+		}
+		if got := get(t, store, "tie-a"); string(got.Payload) != "payload" {
+			t.Fatalf("ListJobs() returned aliased payload: %#v", got)
+		}
+		if _, err := store.ListJobs(context.Background(), jobs.ListJobsRequest{Queue: "queue"}); !errors.Is(err, jobs.ErrInvalidJob) {
+			t.Fatalf("ListJobs() invalid limit error = %v, want ErrInvalidJob", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, err := store.ListJobs(ctx, jobs.ListJobsRequest{Queue: "queue", Limit: 1}); !errors.Is(err, context.Canceled) {
+			t.Fatalf("ListJobs() canceled error = %v, want context.Canceled", err)
+		}
+	})
+
 	t.Run("heartbeat requires current fence", func(t *testing.T) {
 		store := factory(t)
 		create(t, store, newJob("heartbeat", "queue", now(0)))

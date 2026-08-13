@@ -76,6 +76,18 @@ func Precedes(left, right jobs.Job) bool {
 	return left.ID < right.ID
 }
 
+// RecentFirst reports the deterministic listing order for operator-facing job
+// snapshots.
+func RecentFirst(left, right jobs.Job) bool {
+	if !left.UpdatedAt.Equal(right.UpdatedAt) {
+		return left.UpdatedAt.After(right.UpdatedAt)
+	}
+	if !left.CreatedAt.Equal(right.CreatedAt) {
+		return left.CreatedAt.After(right.CreatedAt)
+	}
+	return left.ID < right.ID
+}
+
 // CurrentAttempt validates the current generation, fence, and state.
 func CurrentAttempt(attempt jobs.Attempt, job jobs.Job, token coordination.FencingToken) error {
 	if attempt.Job.Attempt != job.Attempt || attempt.FencingToken != token {
