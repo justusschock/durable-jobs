@@ -95,6 +95,53 @@ func (store *Store) ListJobs(ctx context.Context, request jobs.ListJobsRequest) 
 	return listed, nil
 }
 
+// ListJobPage returns one queue-scoped page in ascending job ID order.
+func (store *Store) ListJobPage(ctx context.Context, request jobs.ListJobPageRequest) (jobs.JobPage, error) {
+	if err := ctx.Err(); err != nil {
+		return jobs.JobPage{}, err
+	}
+	if err := jobs.ValidateListJobPageRequest(request); err != nil {
+		return jobs.JobPage{}, err
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return jobs.JobPage{}, err
+	}
+
+	ids := make([]jobs.JobID, 0, len(store.jobs))
+	for id, job := range store.jobs {
+		if err := ctx.Err(); err != nil {
+			return jobs.JobPage{}, err
+		}
+		if id != job.ID {
+			return jobs.JobPage{}, fmt.Errorf("%w: stored job ID does not match key", jobs.ErrInvalidJob)
+		}
+		if job.Queue == request.Queue && id > request.After {
+			ids = append(ids, id)
+		}
+	}
+	sort.Slice(ids, func(left, right int) bool {
+		return ids[left] < ids[right]
+	})
+	if len(ids) > request.Limit+1 {
+		ids = ids[:request.Limit+1]
+	}
+
+	page := jobs.JobPage{Jobs: make([]jobs.Job, 0, min(len(ids), request.Limit))}
+	for _, id := range ids[:min(len(ids), request.Limit)] {
+		if err := ctx.Err(); err != nil {
+			return jobs.JobPage{}, err
+		}
+		page.Jobs = append(page.Jobs, cloneJob(store.jobs[id]))
+	}
+	if len(ids) > request.Limit {
+		page.NextAfter = page.Jobs[len(page.Jobs)-1].ID
+	}
+	return page, nil
+}
+
 // ClaimReady atomically claims the highest-priority ready job in a queue.
 func (store *Store) ClaimReady(ctx context.Context, request jobs.ClaimRequest) (jobs.Attempt, error) {
 	if err := ctx.Err(); err != nil {

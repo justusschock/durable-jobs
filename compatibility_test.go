@@ -157,7 +157,7 @@ func TestREADMEReleaseDocumentation(t *testing.T) {
 	}
 	for _, required := range []string{
 		"Go 1.22",
-		"go get github.com/justusschock/go-durable-jobs@v0.2.0",
+		"go get github.com/justusschock/go-durable-jobs@v0.5.0",
 		"ExampleDurableClient",
 		"ExampleScheduler",
 	} {

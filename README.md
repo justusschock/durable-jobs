@@ -13,7 +13,7 @@ Module path: `github.com/justusschock/go-durable-jobs`
 
 ## Install the private module
 
-Version `v0.2.0` requires Go 1.22 or newer. Every private sibling dependency is
+Version `v0.5.0` requires Go 1.22 or newer. Every private sibling dependency is
 pinned to `v0.2.0`.
 
 You need access to this repository and its private dependencies. Configure a
@@ -31,7 +31,7 @@ Tell Go that the module family is private, then install this release:
 ```bash
 go env -w GOPRIVATE='github.com/justusschock/*'
 go env -w GONOSUMDB='github.com/justusschock/*'
-go get github.com/justusschock/go-durable-jobs@v0.2.0
+go get github.com/justusschock/go-durable-jobs@v0.5.0
 ```
 
 ## Core flow
@@ -49,6 +49,28 @@ Use `NewRecoveryEngine` for deterministic recovery of expired attempts through
 `go-reconciliation`. The recovery action retains the observed attempt ID,
 fencing token, and heartbeat deadline, so a later heartbeat invalidates a stale
 recovery plan.
+
+## Catalog and read-only maintenance
+
+Both included stores implement the optional `Catalog` interface for offline or
+low-volume operator maintenance. `ListJobPage` returns one queue-scoped page in
+ascending bytewise order of raw `JobID` strings. `After` is an exclusive cursor;
+pass the returned `NextAfter` into the next request. `Limit` must be between 1
+and `MaxJobPageSize` (`100`).
+
+Each page is an independently owned store snapshot. A traversal across multiple
+pages is not a point-in-time snapshot when jobs are created or updated
+concurrently: later pages can observe newer state, and jobs inserted before the
+last cursor may be skipped. The returned `Job` values contain raw payload,
+result, header, failure, and dependency data, so project and redact them before
+displaying or exporting catalog output. The bbolt catalog walks the ordered jobs
+bucket and filters by queue; sparse queues can scan much of the database.
+
+For bbolt inspection tools, `bolt.Options{ReadOnly: true}` opens an existing,
+initialized database without creating, initializing, chmodding, or writing the
+file. The path must already be an owner-only regular file, and schema validation
+runs in a read-only transaction. A read-only bbolt handle cannot coexist with a
+writable bbolt handle for the same file; close writers first or inspect a copy.
 
 ## Schedules and workflows
 

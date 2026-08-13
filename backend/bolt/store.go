@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"time"
 
@@ -27,8 +28,9 @@ var (
 
 // Options configures Open.
 type Options struct {
-	Timeout time.Duration
-	NoSync  bool
+	Timeout  time.Duration
+	NoSync   bool
+	ReadOnly bool
 }
 
 // Store persists jobs and attempts in one bbolt database.
@@ -51,6 +53,9 @@ func Open(path string, options Options) (*Store, error) {
 	if options.Timeout < 0 {
 		return nil, errors.New("durable jobs bolt: negative timeout")
 	}
+	if options.ReadOnly {
+		return openReadOnly(path, options)
+	}
 	initialize, err := needsInitialization(path)
 	if err != nil {
 		return nil, err
@@ -72,6 +77,60 @@ func Open(path string, options Options) (*Store, error) {
 		return nil, err
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return &Store{db: db}, nil
+}
+
+func openReadOnly(path string, options Options) (*Store, error) {
+	info, err := existingDatabaseInfo(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Size() == 0 {
+		return nil, ErrUnsupportedFormat
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("durable jobs bolt: database path %q has non-owner permissions", path)
+	}
+
+	db, err := bbolt.Open(path, info.Mode().Perm(), &bbolt.Options{
+		Timeout:  options.Timeout,
+		NoSync:   options.NoSync,
+		ReadOnly: true,
+		OpenFile: func(name string, _ int, _ os.FileMode) (*os.File, error) {
+			file, err := os.Open(name)
+			if err != nil {
+				return nil, err
+			}
+			actual, err := file.Stat()
+			if err != nil {
+				_ = file.Close()
+				return nil, err
+			}
+			if !actual.Mode().IsRegular() || !os.SameFile(info, actual) {
+				_ = file.Close()
+				return nil, fmt.Errorf("durable jobs bolt: database path %q changed while opening", name)
+			}
+			if actual.Size() == 0 {
+				_ = file.Close()
+				return nil, ErrUnsupportedFormat
+			}
+			if runtime.GOOS != "windows" && actual.Mode().Perm()&0o077 != 0 {
+				_ = file.Close()
+				return nil, fmt.Errorf("durable jobs bolt: database path %q has non-owner permissions", name)
+			}
+			return file, nil
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := db.View(func(tx *bbolt.Tx) error {
+		_, err := checkedBuckets(tx)
+		return err
+	}); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -172,6 +231,66 @@ func (store *Store) ListJobs(ctx context.Context, request jobs.ListJobsRequest) 
 		return nil, err
 	}
 	return listed, nil
+}
+
+// ListJobPage returns one queue-scoped page in ascending raw job ID order.
+func (store *Store) ListJobPage(ctx context.Context, request jobs.ListJobPageRequest) (jobs.JobPage, error) {
+	if err := ctx.Err(); err != nil {
+		return jobs.JobPage{}, err
+	}
+	if err := jobs.ValidateListJobPageRequest(request); err != nil {
+		return jobs.JobPage{}, err
+	}
+
+	page := jobs.JobPage{Jobs: make([]jobs.Job, 0, request.Limit)}
+	err := store.db.View(func(tx *bbolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		buckets, err := checkedBuckets(tx)
+		if err != nil {
+			return err
+		}
+
+		cursor := buckets.jobs.Cursor()
+		var key, value []byte
+		if request.After == "" {
+			key, value = cursor.First()
+		} else {
+			key, value = cursor.Seek([]byte(request.After))
+			if bytes.Equal(key, []byte(request.After)) {
+				key, value = cursor.Next()
+			}
+		}
+
+		for ; key != nil; key, value = cursor.Next() {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			var job jobs.Job
+			if err := decode(bytes.Clone(value), &job); err != nil {
+				return err
+			}
+			if job.ID != jobs.JobID(string(key)) {
+				return ErrUnsupportedFormat
+			}
+			storestate.NormalizeJobTimes(&job)
+			if job.Queue != request.Queue {
+				continue
+			}
+			page.Jobs = append(page.Jobs, storestate.CloneJob(job))
+			if len(page.Jobs) > request.Limit {
+				page.NextAfter = page.Jobs[request.Limit-1].ID
+				page.Jobs = page.Jobs[:request.Limit]
+				return nil
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return jobs.JobPage{}, err
+	}
+	return page, nil
 }
 
 // ClaimReady atomically claims the highest-priority ready job in a queue.
@@ -600,6 +719,23 @@ func needsInitialization(path string) (bool, error) {
 	return false, err
 }
 
+func existingDatabaseInfo(path string) (os.FileInfo, error) {
+	if err := validateSafePath(path); err != nil {
+		return nil, err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("durable jobs bolt: database path %q is a symlink", path)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("durable jobs bolt: database path %q is not a regular file", path)
+	}
+	return info, nil
+}
+
 func validateSafePath(path string) error {
 	parent := filepath.Dir(path)
 	if parent != "." {
@@ -746,4 +882,5 @@ func putTerminalAndPropagate(buckets bucketSet, terminal jobs.Job) error {
 }
 
 var _ jobs.Store = (*Store)(nil)
+var _ jobs.Catalog = (*Store)(nil)
 var _ jobs.ScheduleStore = (*Store)(nil)

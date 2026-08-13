@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	coordination "github.com/justusschock/go-distributed-coordination"
@@ -68,6 +69,46 @@ type RecoverAttemptRequest struct {
 type ListJobsRequest struct {
 	Queue Queue
 	Limit int
+}
+
+// MaxJobPageSize is the largest page accepted by a Catalog.
+const MaxJobPageSize = 100
+
+// ListJobPageRequest selects one queue-scoped catalog page in ascending
+// bytewise order of raw JobID strings. After is an exclusive position; an
+// empty value selects the first page.
+type ListJobPageRequest struct {
+	Queue Queue
+	After JobID
+	Limit int
+}
+
+// JobPage is one independently owned catalog page. NextAfter is empty when no
+// more matching jobs exist in the call's store snapshot.
+type JobPage struct {
+	Jobs      []Job
+	NextAfter JobID
+}
+
+// ValidateListJobPageRequest verifies catalog scope, position, and bounds.
+func ValidateListJobPageRequest(request ListJobPageRequest) error {
+	if !validIdentity(string(request.Queue)) {
+		return fmt.Errorf("%w: invalid catalog queue", ErrInvalidJob)
+	}
+	if request.After != "" && !validIdentity(string(request.After)) {
+		return fmt.Errorf("%w: invalid catalog position", ErrInvalidJob)
+	}
+	if request.Limit <= 0 || request.Limit > MaxJobPageSize {
+		return fmt.Errorf("%w: catalog limit must be between 1 and %d", ErrInvalidJob, MaxJobPageSize)
+	}
+	return nil
+}
+
+// Catalog provides bounded, queue-scoped traversal without widening Store.
+// Each page is one store snapshot; a traversal spanning pages is not a
+// point-in-time snapshot when jobs are created concurrently.
+type Catalog interface {
+	ListJobPage(context.Context, ListJobPageRequest) (JobPage, error)
 }
 
 // Store atomically persists durable jobs and their fenced execution attempts.
