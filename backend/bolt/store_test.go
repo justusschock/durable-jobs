@@ -13,7 +13,7 @@ import (
 
 	jobs "github.com/justusschock/go-durable-jobs"
 	boltjobs "github.com/justusschock/go-durable-jobs/backend/bolt"
-	"github.com/justusschock/go-durable-jobs/internal/storetest"
+	"github.com/justusschock/go-durable-jobs/storetest"
 	bbolt "go.etcd.io/bbolt"
 )
 

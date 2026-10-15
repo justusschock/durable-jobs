@@ -1,6 +1,6 @@
 module github.com/justusschock/go-durable-jobs
 
-go 1.22
+go 1.25
 
 require (
 	github.com/justusschock/go-distributed-coordination v0.2.0

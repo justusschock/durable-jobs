@@ -238,7 +238,9 @@ func TestNewRecoveryEngineRejectsNilDependenciesAndReturnsFourTypeEngine(t *test
 			if err != nil {
 				t.Fatalf("NewRecoveryEngine() error = %v, want nil", err)
 			}
-			var _ *reconciliation.Engine[jobs.RecoverySpec, jobs.RecoveryObserved, jobs.RecoveryAction, jobs.RecoveryAction] = engine
+			if _, ok := any(engine).(*reconciliation.Engine[jobs.RecoverySpec, jobs.RecoveryObserved, jobs.RecoveryAction, jobs.RecoveryAction]); !ok {
+				t.Fatalf("NewRecoveryEngine() engine type = %T, want four-type reconciliation engine", engine)
+			}
 			if engine == nil {
 				t.Fatal("NewRecoveryEngine() engine = nil, want non-nil")
 			}

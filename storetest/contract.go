@@ -1,4 +1,7 @@
-// Package storetest exercises the observable jobs.Store contract.
+// Package storetest exercises the observable jobs.Store, jobs.Catalog, and
+// jobs.ScheduleStore contracts. Store implementations, including those in
+// other modules, run these suites from their own tests to prove semantic
+// equivalence with the bundled memory and bbolt stores.
 package storetest
 
 import (

@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	jobs "github.com/justusschock/go-durable-jobs"
-	"github.com/justusschock/go-durable-jobs/internal/storetest"
+	"github.com/justusschock/go-durable-jobs/storetest"
 )
 
 var _ jobs.Catalog = (*Store)(nil)

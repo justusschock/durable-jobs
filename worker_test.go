@@ -6,6 +6,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	coordination "github.com/justusschock/go-distributed-coordination"
@@ -255,39 +256,41 @@ func TestWorkerRunOneHandlesSuccessErrorAndPanic(t *testing.T) {
 func TestWorkerRunOneHeartbeatsAndReleasesExecutionLease(t *testing.T) {
 	t.Parallel()
 
-	store := newWorkerStore()
-	backend := newWorkerBackend()
-	handlerStarted := make(chan struct{})
-	releaseHandler := make(chan struct{})
-	registry := newWorkerRegistry(t, "send-email", func(context.Context, jobs.Job) (jobs.Result, error) {
-		close(handlerStarted)
-		<-releaseHandler
-		return jobs.Result{}, nil
-	})
-	worker := mustNewWorker(t, store, backend, &workerEventPublisher{}, registry, validWorkerOptions(workerClock{now: time.Unix(100, 0)}))
-	type runOneResult struct {
-		claimed bool
-		err     error
-	}
-	done := make(chan runOneResult, 1)
-	go func() {
-		claimed, err := worker.RunOne(context.Background())
-		done <- runOneResult{claimed: claimed, err: err}
-	}()
+	synctest.Test(t, func(t *testing.T) {
+		store := newWorkerStore()
+		backend := newWorkerBackend()
+		handlerStarted := make(chan struct{})
+		releaseHandler := make(chan struct{})
+		registry := newWorkerRegistry(t, "send-email", func(context.Context, jobs.Job) (jobs.Result, error) {
+			close(handlerStarted)
+			<-releaseHandler
+			return jobs.Result{}, nil
+		})
+		worker := mustNewWorker(t, store, backend, &workerEventPublisher{}, registry, validWorkerOptions(workerClock{now: time.Unix(100, 0)}))
+		type runOneResult struct {
+			claimed bool
+			err     error
+		}
+		done := make(chan runOneResult, 1)
+		go func() {
+			claimed, err := worker.RunOne(context.Background())
+			done <- runOneResult{claimed: claimed, err: err}
+		}()
 
-	receive(t, handlerStarted, "handler start")
-	heartbeat := receive(t, store.heartbeatCalls, "heartbeat")
-	close(releaseHandler)
-	result := receive(t, done, "RunOne result")
-	if result.err != nil || !result.claimed {
-		t.Fatalf("RunOne() = (%t, %v), want (true, nil)", result.claimed, result.err)
-	}
-	if heartbeat.FencingToken != store.claimRequests[0].FencingToken {
-		t.Fatalf("Heartbeat() fencing token = %d, want claim fence %d", heartbeat.FencingToken, store.claimRequests[0].FencingToken)
-	}
-	if len(backend.leases) != 2 || !backend.leases[1].released {
-		t.Fatal("job execution lease was not released")
-	}
+		receive(t, handlerStarted, "handler start")
+		heartbeat := receive(t, store.heartbeatCalls, "heartbeat")
+		close(releaseHandler)
+		result := receive(t, done, "RunOne result")
+		if result.err != nil || !result.claimed {
+			t.Fatalf("RunOne() = (%t, %v), want (true, nil)", result.claimed, result.err)
+		}
+		if heartbeat.FencingToken != store.claimRequests[0].FencingToken {
+			t.Fatalf("Heartbeat() fencing token = %d, want claim fence %d", heartbeat.FencingToken, store.claimRequests[0].FencingToken)
+		}
+		if len(backend.leases) != 2 || !backend.leases[1].released {
+			t.Fatal("job execution lease was not released")
+		}
+	})
 }
 
 func TestWorkerRunOneReportsClaimWhenExecutionAborts(t *testing.T) {
@@ -316,39 +319,41 @@ func TestWorkerRunOneReportsClaimWhenExecutionAborts(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			store := newWorkerStore()
-			backend := newWorkerBackend()
-			handlerStarted := make(chan struct{})
-			handlerCanceled := make(chan struct{})
-			registry := newWorkerRegistry(t, "send-email", func(ctx context.Context, _ jobs.Job) (jobs.Result, error) {
-				close(handlerStarted)
-				<-ctx.Done()
-				close(handlerCanceled)
-				return jobs.Result{}, ctx.Err()
-			})
-			worker := mustNewWorker(t, store, backend, &workerEventPublisher{}, registry, validWorkerOptions(workerClock{now: time.Unix(100, 0)}))
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			type runOneResult struct {
-				claimed bool
-				err     error
-			}
-			done := make(chan runOneResult, 1)
-			go func() {
-				claimed, err := worker.RunOne(ctx)
-				done <- runOneResult{claimed: claimed, err: err}
-			}()
+			synctest.Test(t, func(t *testing.T) {
+				store := newWorkerStore()
+				backend := newWorkerBackend()
+				handlerStarted := make(chan struct{})
+				handlerCanceled := make(chan struct{})
+				registry := newWorkerRegistry(t, "send-email", func(ctx context.Context, _ jobs.Job) (jobs.Result, error) {
+					close(handlerStarted)
+					<-ctx.Done()
+					close(handlerCanceled)
+					return jobs.Result{}, ctx.Err()
+				})
+				worker := mustNewWorker(t, store, backend, &workerEventPublisher{}, registry, validWorkerOptions(workerClock{now: time.Unix(100, 0)}))
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				type runOneResult struct {
+					claimed bool
+					err     error
+				}
+				done := make(chan runOneResult, 1)
+				go func() {
+					claimed, err := worker.RunOne(ctx)
+					done <- runOneResult{claimed: claimed, err: err}
+				}()
 
-			receive(t, handlerStarted, "handler start")
-			test.abort(cancel, backend)
-			receive(t, handlerCanceled, "handler cancellation")
-			result := receive(t, done, "RunOne result")
-			if result.err != nil || !result.claimed {
-				t.Fatalf("RunOne() = (%t, %v), want (true, nil)", result.claimed, result.err)
-			}
-			if len(store.completeRequests) != 0 || len(store.failRequests) != 0 {
-				t.Fatalf("terminal transitions after execution abort: complete=%d fail=%d", len(store.completeRequests), len(store.failRequests))
-			}
+				receive(t, handlerStarted, "handler start")
+				test.abort(cancel, backend)
+				receive(t, handlerCanceled, "handler cancellation")
+				result := receive(t, done, "RunOne result")
+				if result.err != nil || !result.claimed {
+					t.Fatalf("RunOne() = (%t, %v), want (true, nil)", result.claimed, result.err)
+				}
+				if len(store.completeRequests) != 0 || len(store.failRequests) != 0 {
+					t.Fatalf("terminal transitions after execution abort: complete=%d fail=%d", len(store.completeRequests), len(store.failRequests))
+				}
+			})
 		})
 	}
 }
@@ -421,242 +426,256 @@ func TestWorkerRunOneReportsClaimAfterPostClaimError(t *testing.T) {
 func TestWorkerSuccessfulHandlerCompletesWithClaimFenceAndReleasesQueueLease(t *testing.T) {
 	t.Parallel()
 
-	store := newWorkerStore()
-	store.claimAttempt = workerAttempt("success", 7)
-	backend := newWorkerBackend()
-	publisher := &workerEventPublisher{}
-	handlerCalled := make(chan jobs.Job, 1)
-	registry := newWorkerRegistry(t, "send-email", func(ctx context.Context, job jobs.Job) (jobs.Result, error) {
-		handlerCalled <- job
-		return jobs.Result{Payload: []byte("ok")}, nil
+	synctest.Test(t, func(t *testing.T) {
+		store := newWorkerStore()
+		store.claimAttempt = workerAttempt("success", 7)
+		backend := newWorkerBackend()
+		publisher := &workerEventPublisher{}
+		handlerCalled := make(chan jobs.Job, 1)
+		registry := newWorkerRegistry(t, "send-email", func(ctx context.Context, job jobs.Job) (jobs.Result, error) {
+			handlerCalled <- job
+			return jobs.Result{Payload: []byte("ok")}, nil
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		store.afterComplete = cancel
+
+		worker := mustNewWorker(t, store, backend, publisher, registry, validWorkerOptions(workerClock{now: time.Unix(100, 0)}))
+		runDone := runWorker(ctx, worker)
+
+		gotJob := receive(t, handlerCalled, "handler call")
+		if gotJob.ID != "success" {
+			t.Fatalf("handler job ID = %q, want success", gotJob.ID)
+		}
+		waitForRun(t, runDone)
+
+		if len(store.completeRequests) != 1 {
+			t.Fatalf("Complete() calls = %d, want 1", len(store.completeRequests))
+		}
+		if got := store.completeRequests[0].FencingToken; got != 7 {
+			t.Fatalf("Complete() fencing token = %d, want claim fence 7", got)
+		}
+		if got := store.claimRequests[0].FencingToken; got != 7 {
+			t.Fatalf("ClaimReady() fencing token = %d, want queue lease fence 7", got)
+		}
+		if len(store.failRequests) != 0 {
+			t.Fatalf("Fail() calls = %d, want 0", len(store.failRequests))
+		}
+		if got := backend.acquireRequests[0]; got.Key != "jobs/queue/default/claim" || got.Wait {
+			t.Fatalf("queue claim Acquire() = %#v, want non-waiting queue claim lease", got)
+		}
+		if !backend.leases[0].released {
+			t.Fatal("queue claim lease was not released after ClaimReady")
+		}
+		if got := backend.acquireRequests[1]; got.Key != "jobs/job/success" || got.Wait {
+			t.Fatalf("job Acquire() = %#v, want non-waiting job execution lease", got)
+		}
+		if kinds := publisher.kinds(); len(kinds) < 2 || kinds[0] != jobs.EventStarted || kinds[len(kinds)-1] != jobs.EventSucceeded {
+			t.Fatalf("published event kinds = %v, want started first and succeeded last", kinds)
+		}
 	})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	store.afterComplete = cancel
-
-	worker := mustNewWorker(t, store, backend, publisher, registry, validWorkerOptions(workerClock{now: time.Unix(100, 0)}))
-	runDone := runWorker(ctx, worker)
-
-	gotJob := receive(t, handlerCalled, "handler call")
-	if gotJob.ID != "success" {
-		t.Fatalf("handler job ID = %q, want success", gotJob.ID)
-	}
-	waitForRun(t, runDone)
-
-	if len(store.completeRequests) != 1 {
-		t.Fatalf("Complete() calls = %d, want 1", len(store.completeRequests))
-	}
-	if got := store.completeRequests[0].FencingToken; got != 7 {
-		t.Fatalf("Complete() fencing token = %d, want claim fence 7", got)
-	}
-	if got := store.claimRequests[0].FencingToken; got != 7 {
-		t.Fatalf("ClaimReady() fencing token = %d, want queue lease fence 7", got)
-	}
-	if len(store.failRequests) != 0 {
-		t.Fatalf("Fail() calls = %d, want 0", len(store.failRequests))
-	}
-	if got := backend.acquireRequests[0]; got.Key != "jobs/queue/default/claim" || got.Wait {
-		t.Fatalf("queue claim Acquire() = %#v, want non-waiting queue claim lease", got)
-	}
-	if !backend.leases[0].released {
-		t.Fatal("queue claim lease was not released after ClaimReady")
-	}
-	if got := backend.acquireRequests[1]; got.Key != "jobs/job/success" || got.Wait {
-		t.Fatalf("job Acquire() = %#v, want non-waiting job execution lease", got)
-	}
-	if kinds := publisher.kinds(); len(kinds) < 2 || kinds[0] != jobs.EventStarted || kinds[len(kinds)-1] != jobs.EventSucceeded {
-		t.Fatalf("published event kinds = %v, want started first and succeeded last", kinds)
-	}
 }
 
 func TestWorkerLeaseDoneCancelsBlockedHandlerWithoutTerminalTransition(t *testing.T) {
 	t.Parallel()
 
-	store := newWorkerStore()
-	store.claimAttempt = workerAttempt("lease-lost", 11)
-	backend := newWorkerBackend()
-	handlerStarted := make(chan struct{})
-	handlerCanceled := make(chan struct{})
-	registry := newWorkerRegistry(t, "send-email", func(ctx context.Context, job jobs.Job) (jobs.Result, error) {
-		close(handlerStarted)
-		<-ctx.Done()
-		close(handlerCanceled)
-		return jobs.Result{}, ctx.Err()
+	synctest.Test(t, func(t *testing.T) {
+		store := newWorkerStore()
+		store.claimAttempt = workerAttempt("lease-lost", 11)
+		backend := newWorkerBackend()
+		handlerStarted := make(chan struct{})
+		handlerCanceled := make(chan struct{})
+		registry := newWorkerRegistry(t, "send-email", func(ctx context.Context, job jobs.Job) (jobs.Result, error) {
+			close(handlerStarted)
+			<-ctx.Done()
+			close(handlerCanceled)
+			return jobs.Result{}, ctx.Err()
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		worker := mustNewWorker(t, store, backend, &workerEventPublisher{}, registry, validWorkerOptions(workerClock{now: time.Unix(100, 0)}))
+		runDone := runWorker(ctx, worker)
+		receive(t, handlerStarted, "handler start")
+
+		backend.leases[1].lose()
+		receive(t, handlerCanceled, "handler cancellation")
+		cancel()
+		waitForRun(t, runDone)
+
+		if len(store.completeRequests) != 0 || len(store.failRequests) != 0 {
+			t.Fatalf("terminal transitions after lease loss: complete=%d fail=%d", len(store.completeRequests), len(store.failRequests))
+		}
 	})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	worker := mustNewWorker(t, store, backend, &workerEventPublisher{}, registry, validWorkerOptions(workerClock{now: time.Unix(100, 0)}))
-	runDone := runWorker(ctx, worker)
-	receive(t, handlerStarted, "handler start")
-
-	backend.leases[1].lose()
-	receive(t, handlerCanceled, "handler cancellation")
-	cancel()
-	waitForRun(t, runDone)
-
-	if len(store.completeRequests) != 0 || len(store.failRequests) != 0 {
-		t.Fatalf("terminal transitions after lease loss: complete=%d fail=%d", len(store.completeRequests), len(store.failRequests))
-	}
 }
 
 func TestWorkerCancellationPollingCancelsHandler(t *testing.T) {
 	t.Parallel()
 
-	store := newWorkerStore()
-	store.claimAttempt = workerAttempt("cancel-requested", 13)
-	backend := newWorkerBackend()
-	handlerStarted := make(chan struct{})
-	handlerCanceled := make(chan struct{})
-	registry := newWorkerRegistry(t, "send-email", func(ctx context.Context, job jobs.Job) (jobs.Result, error) {
-		close(handlerStarted)
-		<-ctx.Done()
-		close(handlerCanceled)
-		return jobs.Result{}, ctx.Err()
+	synctest.Test(t, func(t *testing.T) {
+		store := newWorkerStore()
+		store.claimAttempt = workerAttempt("cancel-requested", 13)
+		backend := newWorkerBackend()
+		handlerStarted := make(chan struct{})
+		handlerCanceled := make(chan struct{})
+		registry := newWorkerRegistry(t, "send-email", func(ctx context.Context, job jobs.Job) (jobs.Result, error) {
+			close(handlerStarted)
+			<-ctx.Done()
+			close(handlerCanceled)
+			return jobs.Result{}, ctx.Err()
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		store.afterFail = cancel
+		store.afterGet = func() {
+			store.getJob.CancellationRequested = true
+		}
+
+		worker := mustNewWorker(t, store, backend, &workerEventPublisher{}, registry, validWorkerOptions(workerClock{now: time.Unix(100, 0)}))
+		runDone := runWorker(ctx, worker)
+		receive(t, handlerStarted, "handler start")
+		receive(t, store.heartbeatCalls, "heartbeat")
+		receive(t, handlerCanceled, "handler cancellation")
+		waitForRun(t, runDone)
+
+		if len(store.completeRequests) != 0 || len(store.failRequests) != 1 {
+			t.Fatalf("terminal transitions after cancellation polling: complete=%d fail=%d, want one fenced Fail", len(store.completeRequests), len(store.failRequests))
+		}
+		wantFence := backend.leases[0].Info().Token
+		if got := store.failRequests[0].FencingToken; got != wantFence {
+			t.Fatalf("Fail() fencing token = %d, want acquired claim fence %d", got, wantFence)
+		}
 	})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	store.afterFail = cancel
-	store.afterGet = func() {
-		store.getJob.CancellationRequested = true
-	}
-
-	worker := mustNewWorker(t, store, backend, &workerEventPublisher{}, registry, validWorkerOptions(workerClock{now: time.Unix(100, 0)}))
-	runDone := runWorker(ctx, worker)
-	receive(t, handlerStarted, "handler start")
-	receive(t, store.heartbeatCalls, "heartbeat")
-	receive(t, handlerCanceled, "handler cancellation")
-	waitForRun(t, runDone)
-
-	if len(store.completeRequests) != 0 || len(store.failRequests) != 1 {
-		t.Fatalf("terminal transitions after cancellation polling: complete=%d fail=%d, want one fenced Fail", len(store.completeRequests), len(store.failRequests))
-	}
-	wantFence := backend.leases[0].Info().Token
-	if got := store.failRequests[0].FencingToken; got != wantFence {
-		t.Fatalf("Fail() fencing token = %d, want acquired claim fence %d", got, wantFence)
-	}
 }
 
 func TestWorkerHandlerErrorSchedulesRetryWithBoundedDelay(t *testing.T) {
 	t.Parallel()
 
-	store := newWorkerStore()
-	store.claimAttempt = workerAttempt("retry", 15)
-	backend := newWorkerBackend()
-	registry := newWorkerRegistry(t, "send-email", func(context.Context, jobs.Job) (jobs.Result, error) {
-		return jobs.Result{}, errors.New("temporary failure")
+	synctest.Test(t, func(t *testing.T) {
+		store := newWorkerStore()
+		store.claimAttempt = workerAttempt("retry", 15)
+		backend := newWorkerBackend()
+		registry := newWorkerRegistry(t, "send-email", func(context.Context, jobs.Job) (jobs.Result, error) {
+			return jobs.Result{}, errors.New("temporary failure")
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		store.afterFail = cancel
+
+		worker := mustNewWorker(t, store, backend, &workerEventPublisher{}, registry, validWorkerOptions(workerClock{now: time.Unix(100, 0)}))
+		waitForRun(t, runWorker(ctx, worker))
+
+		if len(store.failRequests) != 1 {
+			t.Fatalf("Fail() calls = %d, want 1", len(store.failRequests))
+		}
+		request := store.failRequests[0]
+		wantFence := backend.leases[0].Info().Token
+		if request.FencingToken != wantFence || request.Failure.Code != "handler_error" || !request.Failure.Retryable {
+			t.Fatalf("Fail() request = %#v, want retryable handler_error with acquired claim fence %d", request, wantFence)
+		}
+		wantNext := time.Unix(101, 0).UTC()
+		if !request.NextAvailableAt.Equal(wantNext) {
+			t.Fatalf("NextAvailableAt = %v, want %v", request.NextAvailableAt, wantNext)
+		}
 	})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	store.afterFail = cancel
-
-	worker := mustNewWorker(t, store, backend, &workerEventPublisher{}, registry, validWorkerOptions(workerClock{now: time.Unix(100, 0)}))
-	waitForRun(t, runWorker(ctx, worker))
-
-	if len(store.failRequests) != 1 {
-		t.Fatalf("Fail() calls = %d, want 1", len(store.failRequests))
-	}
-	request := store.failRequests[0]
-	wantFence := backend.leases[0].Info().Token
-	if request.FencingToken != wantFence || request.Failure.Code != "handler_error" || !request.Failure.Retryable {
-		t.Fatalf("Fail() request = %#v, want retryable handler_error with acquired claim fence %d", request, wantFence)
-	}
-	wantNext := time.Unix(101, 0).UTC()
-	if !request.NextAvailableAt.Equal(wantNext) {
-		t.Fatalf("NextAvailableAt = %v, want %v", request.NextAvailableAt, wantNext)
-	}
 }
 
 func TestWorkerPanicRecordsNonRetryableHandlerPanicFailure(t *testing.T) {
 	t.Parallel()
 
-	store := newWorkerStore()
-	store.claimAttempt = workerAttempt("panic", 17)
-	backend := newWorkerBackend()
-	registry := newWorkerRegistry(t, "send-email", func(ctx context.Context, job jobs.Job) (jobs.Result, error) {
-		panic("boom")
+	synctest.Test(t, func(t *testing.T) {
+		store := newWorkerStore()
+		store.claimAttempt = workerAttempt("panic", 17)
+		backend := newWorkerBackend()
+		registry := newWorkerRegistry(t, "send-email", func(ctx context.Context, job jobs.Job) (jobs.Result, error) {
+			panic("boom")
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		store.afterFail = cancel
+
+		worker := mustNewWorker(t, store, backend, &workerEventPublisher{}, registry, validWorkerOptions(workerClock{now: time.Unix(100, 0)}))
+		waitForRun(t, runWorker(ctx, worker))
+
+		if len(store.failRequests) != 1 {
+			t.Fatalf("Fail() calls = %d, want 1", len(store.failRequests))
+		}
+		failure := store.failRequests[0].Failure
+		if failure.Code != "handler_panic" || failure.Retryable {
+			t.Fatalf("panic failure = %#v, want nonretryable handler_panic", failure)
+		}
+		if len(store.completeRequests) != 0 {
+			t.Fatalf("Complete() calls = %d, want 0", len(store.completeRequests))
+		}
 	})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	store.afterFail = cancel
-
-	worker := mustNewWorker(t, store, backend, &workerEventPublisher{}, registry, validWorkerOptions(workerClock{now: time.Unix(100, 0)}))
-	waitForRun(t, runWorker(ctx, worker))
-
-	if len(store.failRequests) != 1 {
-		t.Fatalf("Fail() calls = %d, want 1", len(store.failRequests))
-	}
-	failure := store.failRequests[0].Failure
-	if failure.Code != "handler_panic" || failure.Retryable {
-		t.Fatalf("panic failure = %#v, want nonretryable handler_panic", failure)
-	}
-	if len(store.completeRequests) != 0 {
-		t.Fatalf("Complete() calls = %d, want 0", len(store.completeRequests))
-	}
 }
 
 func TestWorkerSuccessfulHandlerPublishesCanceledWhenCompleteReturnsCanceled(t *testing.T) {
 	t.Parallel()
 
-	store := newWorkerStore()
-	store.claimAttempt = workerAttempt("canceled-on-complete", 19)
-	store.completeState = jobs.StateCanceled
-	backend := newWorkerBackend()
-	publisher := &workerEventPublisher{}
-	registry := newWorkerRegistry(t, "send-email", func(context.Context, jobs.Job) (jobs.Result, error) {
-		return jobs.Result{Payload: []byte("ignored")}, nil
+	synctest.Test(t, func(t *testing.T) {
+		store := newWorkerStore()
+		store.claimAttempt = workerAttempt("canceled-on-complete", 19)
+		store.completeState = jobs.StateCanceled
+		backend := newWorkerBackend()
+		publisher := &workerEventPublisher{}
+		registry := newWorkerRegistry(t, "send-email", func(context.Context, jobs.Job) (jobs.Result, error) {
+			return jobs.Result{Payload: []byte("ignored")}, nil
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		store.afterComplete = cancel
+
+		worker := mustNewWorker(t, store, backend, publisher, registry, validWorkerOptions(workerClock{now: time.Unix(100, 0)}))
+		waitForRun(t, runWorker(ctx, worker))
+
+		kinds := publisher.kinds()
+		if len(kinds) < 2 || kinds[len(kinds)-1] != jobs.EventCanceled {
+			t.Fatalf("published event kinds = %v, want canceled last", kinds)
+		}
 	})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	store.afterComplete = cancel
-
-	worker := mustNewWorker(t, store, backend, publisher, registry, validWorkerOptions(workerClock{now: time.Unix(100, 0)}))
-	waitForRun(t, runWorker(ctx, worker))
-
-	kinds := publisher.kinds()
-	if len(kinds) < 2 || kinds[len(kinds)-1] != jobs.EventCanceled {
-		t.Fatalf("published event kinds = %v, want canceled last", kinds)
-	}
 }
 
 func TestWorkerConcurrentRunsDoNotDoubleExecute(t *testing.T) {
 	t.Parallel()
 
-	store := newWorkerStore()
-	store.claimAttempt = workerAttempt("once", 1)
-	backend := coordinationmemory.NewBackend(nil)
-	started := make(chan struct{})
-	release := make(chan struct{})
-	var executions atomic.Int32
-	registry := newWorkerRegistry(t, "send-email", func(context.Context, jobs.Job) (jobs.Result, error) {
-		if executions.Add(1) == 1 {
-			close(started)
+	synctest.Test(t, func(t *testing.T) {
+		store := newWorkerStore()
+		store.claimAttempt = workerAttempt("once", 1)
+		backend := coordinationmemory.NewBackend(nil)
+		started := make(chan struct{})
+		release := make(chan struct{})
+		var executions atomic.Int32
+		registry := newWorkerRegistry(t, "send-email", func(context.Context, jobs.Job) (jobs.Result, error) {
+			if executions.Add(1) == 1 {
+				close(started)
+			}
+			<-release
+			return jobs.Result{}, nil
+		})
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		store.afterComplete = cancel
+
+		firstOptions := validWorkerOptions(workerClock{now: time.Unix(100, 0)})
+		secondOptions := firstOptions
+		secondOptions.WorkerID = "worker-2"
+		first := mustNewWorker(t, store, backend, &workerEventPublisher{}, registry, firstOptions)
+		second := mustNewWorker(t, store, backend, &workerEventPublisher{}, registry, secondOptions)
+		firstDone := runWorker(ctx, first)
+		secondDone := runWorker(ctx, second)
+		receive(t, started, "first handler start")
+		close(release)
+		waitForRun(t, firstDone)
+		waitForRun(t, secondDone)
+
+		if got := executions.Load(); got != 1 {
+			t.Fatalf("handler executions = %d, want 1", got)
 		}
-		<-release
-		return jobs.Result{}, nil
+		if len(store.completeRequests) != 1 {
+			t.Fatalf("Complete() calls = %d, want 1", len(store.completeRequests))
+		}
 	})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	store.afterComplete = cancel
-
-	firstOptions := validWorkerOptions(workerClock{now: time.Unix(100, 0)})
-	secondOptions := firstOptions
-	secondOptions.WorkerID = "worker-2"
-	first := mustNewWorker(t, store, backend, &workerEventPublisher{}, registry, firstOptions)
-	second := mustNewWorker(t, store, backend, &workerEventPublisher{}, registry, secondOptions)
-	firstDone := runWorker(ctx, first)
-	secondDone := runWorker(ctx, second)
-	receive(t, started, "first handler start")
-	close(release)
-	waitForRun(t, firstDone)
-	waitForRun(t, secondDone)
-
-	if got := executions.Load(); got != 1 {
-		t.Fatalf("handler executions = %d, want 1", got)
-	}
-	if len(store.completeRequests) != 1 {
-		t.Fatalf("Complete() calls = %d, want 1", len(store.completeRequests))
-	}
 }
 
 func validWorkerOptions(clock jobs.Clock) jobs.WorkerOptions {

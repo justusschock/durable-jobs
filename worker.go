@@ -294,9 +294,10 @@ func (worker *Worker) fail(ctx context.Context, attempt Attempt, failure Failure
 	}
 
 	kind := EventFailed
-	if job.State == StateRetryWaiting {
+	switch job.State {
+	case StateRetryWaiting:
 		kind = EventRetryScheduled
-	} else if job.State == StateCanceled {
+	case StateCanceled:
 		kind = EventCanceled
 	}
 	return worker.publish(ctx, Event{Kind: kind, JobID: job.ID, AttemptID: attempt.ID, Queue: job.Queue, At: now, Failure: &failure})

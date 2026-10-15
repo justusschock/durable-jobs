@@ -16,8 +16,8 @@ func TestModuleCompatibilityPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 	module := string(contents)
-	if !regexp.MustCompile(`(?m)^go 1\.22$`).MatchString(module) {
-		t.Error("go.mod must declare Go 1.22")
+	if !regexp.MustCompile(`(?m)^go 1\.25$`).MatchString(module) {
+		t.Error("go.mod must declare Go 1.25")
 	}
 	if strings.Contains(module, "\ntoolchain ") || strings.Contains(module, "\nreplace ") {
 		t.Error("go.mod must not contain toolchain or replace directives")
@@ -76,13 +76,13 @@ func TestCICompatibilityPolicy(t *testing.T) {
 	}
 
 	job := yamlBlockContainingAll(yamlIndentedBlock(workflow, "jobs:"), 2, []string{
-		"'1.22.x'", "'1.23.x'", "'1.24.x'", "'1.25.x'", "'1.26.x'",
+		"'1.25.x'", "'1.26.x'",
 	})
 	if job == "" {
 		t.Fatal("no CI job contains the complete supported Go matrix")
 	}
 	versions := regexp.MustCompile(`(?m)^\s*-\s*'(1\.[0-9]+\.x)'\s*$`).FindAllStringSubmatch(yamlIndentedBlock(job, "go-version:"), -1)
-	wantVersions := []string{"1.22.x", "1.23.x", "1.24.x", "1.25.x", "1.26.x"}
+	wantVersions := []string{"1.25.x", "1.26.x"}
 	if len(versions) != len(wantVersions) {
 		t.Fatalf("Go matrix has %d versions, want %d", len(versions), len(wantVersions))
 	}
@@ -109,38 +109,45 @@ func TestCICompatibilityPolicy(t *testing.T) {
 		"go test -race -count=1 ./...",
 	)
 	if strings.Contains(job, "go mod tidy -diff") {
-		t.Error("Go 1.22 CI must not use unsupported go mod tidy -diff")
+		t.Error("CI must keep the explicit tidy diff check")
 	}
 	if !regexp.MustCompile(`(?m)^\s+timeout-minutes:\s*[1-9][0-9]*\s*$`).MatchString(job) {
 		t.Error("CI job must have a finite positive timeout")
 	}
 
-	secretReference := "${{ secrets.GO_MODULES_TOKEN }}"
-	if strings.Count(workflow, secretReference) != 1 {
-		t.Errorf("workflow must reference GO_MODULES_TOKEN exactly once, got %d", strings.Count(workflow, secretReference))
+	postgres := yamlBlockContainingAll(yamlIndentedBlock(workflow, "jobs:"), 2, []string{"image: postgres:16"})
+	if postgres == "" {
+		t.Fatal("no CI job runs the PostgreSQL backend against a postgres:16 service")
 	}
-	credentialStep := yamlStepContaining(job, "GO_MODULES_TOKEN: "+secretReference)
-	if credentialStep == "" {
-		t.Fatal("GO_MODULES_TOKEN must be supplied through a step environment")
-	}
-	requireWorkflowText(t, credentialStep,
-		"env:",
-		"GO_MODULES_TOKEN: "+secretReference,
-		`if [ -z "$GO_MODULES_TOKEN" ]; then`,
-		`credentials_file="$RUNNER_TEMP/git-credentials"`,
-		"umask 077",
-		`"$GO_MODULES_TOKEN" > "$credentials_file"`,
-		`chmod 0600 "$credentials_file"`,
-		`git config --global credential.helper "store --file=$credentials_file"`,
+	requireWorkflowText(t, postgres,
+		"runs-on: ubuntu-latest",
+		"uses: actions/checkout@v6",
+		"uses: actions/setup-go@v6",
+		"cache: false",
+		"GOPRIVATE: github.com/justusschock/*",
+		"GONOSUMDB: github.com/justusschock/*",
+		"DURABLE_JOBS_POSTGRES_DSN: postgres://",
+		"working-directory: backend/postgres",
+		"go mod verify",
+		"go mod tidy",
+		"git diff --exit-code -- go.mod go.sum",
+		"go vet ./...",
+		"go test -race -count=1",
 	)
+	if !regexp.MustCompile(`(?m)^\s+timeout-minutes:\s*[1-9][0-9]*\s*$`).MatchString(postgres) {
+		t.Error("PostgreSQL CI job must have a finite positive timeout")
+	}
+
+	secretReference := "${{ secrets.GO_MODULES_TOKEN }}"
+	if strings.Count(workflow, secretReference) != 2 {
+		t.Errorf("workflow must reference GO_MODULES_TOKEN once per job, got %d", strings.Count(workflow, secretReference))
+	}
 	if regexp.MustCompile(`https?://[^\n]*(?:secrets\.GO_MODULES_TOKEN|\$\{\{\s*secrets\.GO_MODULES_TOKEN\s*\}\})`).MatchString(workflow) {
 		t.Error("GO_MODULES_TOKEN must not be interpolated into a URL")
 	}
-	cleanup := yamlStepContaining(job, "if: always()")
-	if cleanup == "" {
-		t.Fatal("credential cleanup must run with if: always()")
+	for _, credentialJob := range []string{job, postgres} {
+		requireCredentialHandling(t, credentialJob, secretReference)
 	}
-	requireWorkflowText(t, cleanup, "if: always()", `rm -f "$RUNNER_TEMP/git-credentials"`)
 	requireWorkflowText(t, yamlIndentedBlock(workflow, "on:"), "push:", "pull_request:")
 }
 
@@ -156,8 +163,8 @@ func TestREADMEReleaseDocumentation(t *testing.T) {
 		}
 	}
 	for _, required := range []string{
-		"Go 1.22",
-		"go get github.com/justusschock/go-durable-jobs@v0.5.0",
+		"Go 1.25",
+		"go get github.com/justusschock/go-durable-jobs@v0.7.0",
 		"ExampleDurableClient",
 		"ExampleScheduler",
 	} {
@@ -165,6 +172,32 @@ func TestREADMEReleaseDocumentation(t *testing.T) {
 			t.Errorf("README is missing %q", required)
 		}
 	}
+}
+
+func requireCredentialHandling(t *testing.T, job, secretReference string) {
+	t.Helper()
+	if strings.Count(job, secretReference) != 1 {
+		t.Errorf("CI job must reference GO_MODULES_TOKEN exactly once, got %d", strings.Count(job, secretReference))
+	}
+	credentialStep := yamlStepContaining(job, "GO_MODULES_TOKEN: "+secretReference)
+	if credentialStep == "" {
+		t.Fatal("GO_MODULES_TOKEN must be supplied through a step environment")
+	}
+	requireWorkflowText(t, credentialStep,
+		"env:",
+		"GO_MODULES_TOKEN: "+secretReference,
+		`if [ -z "$GO_MODULES_TOKEN" ]; then`,
+		`credentials_file="$RUNNER_TEMP/git-credentials"`,
+		"umask 077",
+		`"$GO_MODULES_TOKEN" > "$credentials_file"`,
+		`chmod 0600 "$credentials_file"`,
+		`git config --global credential.helper "store --file=$credentials_file"`,
+	)
+	cleanup := yamlStepContaining(job, "if: always()")
+	if cleanup == "" {
+		t.Fatal("credential cleanup must run with if: always()")
+	}
+	requireWorkflowText(t, cleanup, "if: always()", `rm -f "$RUNNER_TEMP/git-credentials"`)
 }
 
 func requireWorkflowText(t *testing.T, contents string, requirements ...string) {
