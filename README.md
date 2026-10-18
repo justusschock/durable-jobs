@@ -1,90 +1,146 @@
 # go-durable-jobs
 
-`go-durable-jobs` provides durable job primitives for Go:
-atomic queue claims, fenced execution attempts, heartbeats, retries,
-cancellation, crash recovery, one-shot and fixed-interval schedules, dependency
-workflows, and typed lifecycle events.
+`go-durable-jobs` is a Go library for durable background jobs: jobs are
+persisted before anything else happens, claimed atomically, executed under
+fenced leases with heartbeats, retried with bounded exponential backoff,
+recovered when a worker disappears, and scheduled once or at fixed intervals.
+It is for Go services that need work to survive crashes and restarts, from a
+single process with an embedded database to many replicas sharing PostgreSQL.
 
-The module includes a mutex-backed memory store for tests and local use and a
-crash-safe bbolt store for persistent single-process workloads. The nested
-`backend/postgres` module adds a PostgreSQL store for multi-process and
-multi-replica deployments. Public job payloads, results,
-headers, schedules, and dependency lists are independently owned snapshots.
+## Features
 
-Module path: `github.com/justusschock/go-durable-jobs`
+- `DurableClient`: validated enqueue that persists the job before it publishes
+  a queue wakeup, plus `Get` and `Cancel`.
+- `Worker`: claims jobs under a coordination lease whose fencing token guards
+  every heartbeat, completion and failure, so a worker that lost its lease can
+  never commit a result. `Run` polls; `RunOne` executes at most one job.
+- Retries with bounded exponential backoff (`RetryPolicy`, `RetryDelay`);
+  handler panics and missing handlers are recorded as non-retryable failures.
+- Cooperative cancellation of pending and running jobs.
+- `NewRecoveryEngine`: returns expired attempts to their queue through a
+  fenced compare-and-swap, built on `go-reconciliation`.
+- `Scheduler`: one-shot and fixed-interval schedules with idempotent
+  occurrence IDs and revision-fenced cursors.
+- Dependency workflows (`DependsOn`): a job runs only after its prerequisites
+  succeed; failed or canceled prerequisites fail their dependents transitively.
+- `Catalog`: bounded, queue-scoped, cursor-paginated job listing for
+  operator tools.
+- Typed lifecycle `Event`s published through `go-messaging`.
+- Three stores with identical semantics: in-memory, bbolt (embedded,
+  crash-safe) and PostgreSQL (multi-replica), all verified by the public
+  `storetest` contract suites.
 
-## Install the private module
+## Installation
 
-Version `v0.7.0` requires Go 1.25 or newer. Every private sibling dependency is
-pinned to `v0.2.0`.
-
-You need access to this repository and its private dependencies. Configure a
-Git credential helper or SSH agent; do not place access tokens in Git URLs,
-source files, `go env`, or shell history. GitHub CLI can configure Git's
-credential helper after browser authentication:
-
-```bash
-gh auth login --hostname github.com --git-protocol https --web
-gh auth setup-git --hostname github.com
+```sh
+go get github.com/justusschock/go-durable-jobs@latest
+# optional, PostgreSQL store (separate module, pulls in pgx):
+go get github.com/justusschock/go-durable-jobs/backend/postgres@latest
 ```
 
-Tell Go that the module family is private, then install this release:
+Requires Go 1.25 or newer. The PostgreSQL store requires PostgreSQL 12 or
+newer.
 
-```bash
-go env -w GOPRIVATE='github.com/justusschock/*'
-go env -w GONOSUMDB='github.com/justusschock/*'
-go get github.com/justusschock/go-durable-jobs@v0.7.0
+## Quick start
+
+This is [`Example`](example_test.go), compiled and run by `go test`:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	coordinationmemory "github.com/justusschock/go-distributed-coordination/memory"
+	jobs "github.com/justusschock/go-durable-jobs"
+	"github.com/justusschock/go-durable-jobs/backend/memory"
+	messagingmemory "github.com/justusschock/go-messaging/memory"
+)
+
+// systemClock is the production jobs.Clock: it reads the wall clock.
+type systemClock struct{}
+
+func (systemClock) Now() time.Time { return time.Now() }
+
+func main() {
+	ctx := context.Background()
+	store := memory.New()
+
+	client, err := jobs.NewClient(store, messagingmemory.NewBroker[jobs.Wakeup](time.Second), systemClock{})
+	if err != nil {
+		panic(err)
+	}
+	if _, err := client.Enqueue(ctx, jobs.EnqueueRequest{
+		ID:      "greet-1",
+		Queue:   "default",
+		Kind:    "greet",
+		Payload: []byte("world"),
+		Retry:   jobs.RetryPolicy{MaxAttempts: 3, InitialBackoff: time.Second, MaxBackoff: time.Minute, Multiplier: 2},
+	}); err != nil {
+		panic(err)
+	}
+
+	registry := jobs.MapRegistry{
+		"greet": func(_ context.Context, job jobs.Job) (jobs.Result, error) {
+			return jobs.Result{Payload: append([]byte("hello, "), job.Payload...)}, nil
+		},
+	}
+	worker, err := jobs.NewWorker(store, coordinationmemory.NewBackend(nil), messagingmemory.NewBroker[jobs.Event](time.Second), registry, jobs.WorkerOptions{
+		WorkerID:          "worker-1",
+		Queues:            []jobs.Queue{"default"},
+		PollInterval:      time.Second,
+		LeaseTTL:          30 * time.Second,
+		HeartbeatInterval: 10 * time.Second,
+		ClaimLimit:        10,
+		Clock:             systemClock{},
+	})
+	if err != nil {
+		panic(err)
+	}
+	// Run(ctx) polls until ctx ends; RunOne executes at most one job.
+	if _, err := worker.RunOne(ctx); err != nil {
+		panic(err)
+	}
+
+	job, err := client.Get(ctx, "greet-1")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(job.State == jobs.StateSucceeded, string(job.Result)) // true hello, world
+}
 ```
 
-## Core flow
+In production, use `backend/bolt` or `backend/postgres` as the store, a
+distributed `go-distributed-coordination` backend for leases, and a real
+`go-messaging` publisher. [`ExampleDurableClient`](example_test.go) and
+[`ExampleScheduler`](example_test.go) show enqueueing and schedules.
 
-Create a `DurableClient` with a `Store`, a typed wakeup publisher, and a
-deterministic `Clock`. `Enqueue` validates and persists the job before it
-publishes a queue wakeup. A publish failure never erases the durable job.
+## Packages
 
-Workers use `go-distributed-coordination` leases to obtain fencing tokens.
-Every heartbeat, completion, failure, and recovery operation checks the current
-attempt and token atomically in the store. Handler inputs and outputs are
-cloned, and losing a lease prevents a stale worker from committing a result.
+| Package | Purpose |
+|---|---|
+| `github.com/justusschock/go-durable-jobs` (package `jobs`) | Job model, `Store`/`Catalog`/`ScheduleStore` contracts, `DurableClient`, `Worker`, `Scheduler`, recovery engine, errors and events. |
+| `.../backend/memory` | Mutex-backed in-memory store for tests and local use. |
+| `.../backend/bolt` | Crash-safe bbolt store for single-process persistence, with a read-only inspection mode. |
+| `.../backend/postgres` | PostgreSQL store for multi-process and multi-replica deployments (nested module). |
+| `.../storetest` | Contract suites (`Run`, `RunCatalog`, `RunSchedule`) every store implementation must pass. |
 
-Use `NewRecoveryEngine` for deterministic recovery of expired attempts through
-`go-reconciliation`. The recovery action retains the observed attempt ID,
-fencing token, and heartbeat deadline, so a later heartbeat invalidates a stale
-recovery plan.
+Packages under `internal/` are not part of the API.
 
-## Catalog and read-only maintenance
+### bbolt store
 
-All included stores implement the optional `Catalog` interface for offline or
-low-volume operator maintenance. `ListJobPage` returns one queue-scoped page in
-ascending bytewise order of raw `JobID` strings. `After` is an exclusive cursor;
-pass the returned `NextAfter` into the next request. `Limit` must be between 1
-and `MaxJobPageSize` (`100`).
+`bolt.Open(path, bolt.Options{})` creates or opens an owner-only (`0600`)
+database file and validates its schema; symlinked paths are rejected.
+`bolt.Options{ReadOnly: true}` opens an existing, initialized database without
+creating, initializing, chmodding or writing it. bbolt allows one writable
+process per file, and a read-only handle cannot coexist with a writable one.
 
-Each page is an independently owned store snapshot. A traversal across multiple
-pages is not a point-in-time snapshot when jobs are created or updated
-concurrently: later pages can observe newer state, and jobs inserted before the
-last cursor may be skipped. The returned `Job` values contain raw payload,
-result, header, failure, and dependency data, so project and redact them before
-displaying or exporting catalog output. The bbolt catalog walks the ordered jobs
-bucket and filters by queue; sparse queues can scan much of the database.
+### PostgreSQL store
 
-For bbolt inspection tools, `bolt.Options{ReadOnly: true}` opens an existing,
-initialized database without creating, initializing, chmodding, or writing the
-file. The path must already be an owner-only regular file, and schema validation
-runs in a read-only transaction. A read-only bbolt handle cannot coexist with a
-writable bbolt handle for the same file; close writers first or inspect a copy.
-
-## PostgreSQL backend
-
-`github.com/justusschock/go-durable-jobs/backend/postgres` is a separate
-module, so only programs that use it depend on `pgx`. It requires Go 1.25 and
-PostgreSQL 12 or newer, and is released in lockstep with the core module under
-`backend/postgres/vX.Y.Z` tags; use the same version for both modules.
-
-```bash
-go get github.com/justusschock/go-durable-jobs@v0.7.0
-go get github.com/justusschock/go-durable-jobs/backend/postgres@v0.7.0
-```
+`backend/postgres` is a separate module, so only programs that use it depend
+on `pgx`.
 
 ```go
 pool, err := pgxpool.New(ctx, os.Getenv("DATABASE_URL"))
@@ -101,126 +157,85 @@ if err := store.Migrate(ctx); err != nil {
 ```
 
 `Open` checks connectivity but never changes the database; the caller keeps
-ownership of the pool. `Options.Schema` defaults to `durable_jobs`; distinct
-schemas in one database are independent stores. `*postgres.Store` implements
-`Store`, `Catalog`, and `ScheduleStore`.
+ownership of the pool. `Migrate` applies the embedded, versioned SQL
+migrations under a transaction-scoped advisory lock, so it is safe to call
+from every replica at startup; applied versions are recorded in
+`<schema>.schema_migrations`. Every mutation is one read-committed transaction
+that locks the affected rows, `ClaimReady` uses `FOR UPDATE SKIP LOCKED`, and
+transactions aborted by deadlocks or serialization failures are retried with
+bounded backoff. Timestamps keep nanosecond precision. PostgreSQL text cannot
+hold NUL bytes or invalid UTF-8, so such identities are rejected with
+`ErrInvalidJob`; payloads, results and headers are stored exactly.
 
-### Migrations
+The integration tests need a disposable database and skip without one:
 
-`Migrate` creates the schema if needed and applies the versioned SQL files
-embedded from `backend/postgres/migrations`. Applied versions are recorded in
-`<schema>.schema_migrations`, so repeated calls are no-ops. Concurrent callers
-in any number of processes serialize on a transaction-scoped advisory lock, and
-all pending migrations commit atomically or not at all. A replica that finds
-versions it does not know leaves them in place, which keeps older replicas
-running during a rolling upgrade; migrations within a major version are
-additive. Run `Migrate` at startup from every replica, or once from a deploy
-step with a role that may create objects in the schema.
-
-### Multi-replica guarantees
-
-The store passes the same `storetest` contract suites as the memory and bbolt
-stores: dependency gating, transitive `dependency_failed` propagation, priority
-ordering, retries, fenced heartbeats and terminal transitions, cancellation,
-recovery candidates, and catalog pagination behave identically. Any number of
-replicas can share one schema:
-
-- Every mutation is one read-committed transaction that locks the affected job
-  rows (`SELECT ... FOR UPDATE`). Heartbeat, completion, failure, cancellation,
-  and recovery of one job are therefore serialized across processes, and the
-  fencing-token and attempt-generation checks run under that lock.
-- `ClaimReady` selects the next ready job with `FOR UPDATE SKIP LOCKED`. Two
-  claimers never receive the same job and never block on each other; a claimer
-  takes the next job in priority order while another transaction holds the
-  head of the queue, so claim order is strict only per job, not globally
-  linearizable across concurrent claimers.
-- Attempt IDs come from a database sequence and are unique across processes.
-- Dependency propagation locks pending dependents in job ID order.
-  Transactions that PostgreSQL aborts for deadlocks or serialization failures
-  are retried with bounded exponential backoff.
-
-Timestamps keep full nanosecond precision (a `timestamptz` plus a nanosecond
-remainder column), and unsigned counters use `numeric(20, 0)`. PostgreSQL text
-cannot contain NUL bytes or invalid UTF-8, so `Create` rejects such job IDs,
-queues, kinds, dependency IDs, and worker IDs with `ErrInvalidJob`; payloads,
-results, headers, and failures are stored exactly. Attempt rows are retained
-for audit, as in the bbolt store.
-
-Run the backend tests against a disposable database; each test creates and
-drops its own schema, and the tests skip when the variable is unset:
-
-```bash
+```sh
 cd backend/postgres
 DURABLE_JOBS_POSTGRES_DSN='postgres://postgres@localhost:5432/postgres?sslmode=disable' \
-  GOWORK=off go test -race ./...
+  go test -race ./...
 ```
 
-## Store contract suites
+## Design and guarantees
 
-The public `storetest` package exposes the behavioral contracts every store
-must satisfy: `storetest.Run` for `Store`, `storetest.RunCatalog` for
-`Catalog`, and `storetest.RunSchedule` for `ScheduleStore`. Call them from a
-custom store's tests with a factory that returns a fresh, empty store.
+- **Durability first.** `Enqueue` persists the job before publishing its
+  wakeup. If publishing fails it returns the created job together with an
+  error wrapping `ErrWakeupPublish`; the job stays claimable.
+- **Fencing.** Each claim records the lease's fencing token and an attempt
+  generation. Heartbeat, completion, failure and recovery check both
+  atomically in the store and return `ErrStaleAttempt` when either is old.
+  Heartbeat deadlines and `UpdatedAt` never move backward.
+- **At-least-once execution.** A handler may run again after a crash or lease
+  loss, so handlers should be idempotent. A worker that loses its lease
+  cancels the handler and records nothing.
+- **Ordering.** Within a queue, ready jobs are claimed by priority
+  (descending), then `AvailableAt`, then ID.
+- **Snapshots.** Every `Job`, `Schedule` and `Attempt` returned to callers is
+  independently owned; mutating it never affects the store.
+- **Concurrency.** Clients, workers, schedulers and all bundled stores are
+  safe for concurrent use. Blocking operations take a `context.Context` and
+  honour cancellation.
+- **Errors.** Sentinel errors (`ErrInvalidJob`, `ErrJobExists`,
+  `ErrJobNotFound`, `ErrNoReadyJob`, `ErrStaleAttempt`,
+  `ErrInvalidTransition`, `ErrDependencyFailed`, `ErrWakeupPublish`, and each
+  backend's `ErrUnsupportedFormat`) are wrapped with `%w`; test them with
+  `errors.Is`. Errors never contain payloads, and handler error values are not
+  persisted.
+- **No logging.** The library reports through return values and lifecycle
+  events only.
+- **Catalog consistency.** Each `ListJobPage` result is one store snapshot; a
+  traversal across pages is weakly consistent. Catalog results contain raw
+  payloads, so redact them before display.
+- **Stability.** The module is at `v0.x`: minor releases may break the API.
+  Every break is listed in [CHANGELOG.md](CHANGELOG.md).
 
-## Schedules and workflows
+## Releasing the two modules
 
-All included stores implement `ScheduleStore`. A zero interval creates a
-one-shot schedule; a positive interval creates a fixed-interval schedule.
-`Scheduler.RunDue` uses occurrence IDs of the form
-`<schedule-id>/<due-unix-nano>`, making a crash between enqueue and cursor
-advance idempotent. Missed intervals advance from the prior due time to the
-first time strictly after the scheduler clock.
+The repository contains two modules: the core module at the root (tags
+`vX.Y.Z`) and `backend/postgres` (tags `backend/postgres/vX.Y.Z`). The
+PostgreSQL module requires the core module and, for development inside this
+repository, replaces it with `../..`; that replace directive has no effect on
+consumers. Release them in order:
 
-Jobs may name prerequisite job IDs in `DependsOn`. A job becomes claimable only
-after every dependency succeeds. Failed or canceled dependencies atomically and
-transitively fail pending dependents with the `dependency_failed` code.
-`ValidateDependencies` rejects missing or already failed prerequisites before a
-caller submits a workflow job.
+1. Tag the core module, `vX.Y.Z`.
+2. In `backend/postgres/go.mod`, require `github.com/justusschock/go-durable-jobs vX.Y.Z`,
+   run `go mod tidy`, and merge.
+3. Tag `backend/postgres/vX.Y.Z` on that commit.
 
-## Executable examples
+Use the same version for both modules.
 
-The repository contains complete, compile-checked examples:
+## Documentation
 
-- [`ExampleDurableClient`](example_test.go) enqueues and reads a durable job.
-- [`ExampleScheduler`](example_test.go) persists and runs a fixed-interval
-  schedule occurrence.
+- Requirements and design decisions: [docs/README.md](docs/README.md) (PRD and
+  ADRs).
+- API reference: [pkg.go.dev/github.com/justusschock/go-durable-jobs](https://pkg.go.dev/github.com/justusschock/go-durable-jobs)
+  and [the PostgreSQL module](https://pkg.go.dev/github.com/justusschock/go-durable-jobs/backend/postgres).
 
-Run them directly:
+## Contributing
 
-```bash
-go test -run '^ExampleDurableClient$' .
-go test -run '^ExampleScheduler$' .
-```
-
-## Dependency boundaries
-
-The core module is independent of product resource schemas, caches,
-object storage, and SQL drivers; `pgx` is required only by the nested
-`backend/postgres` module. Its direct platform dependencies are:
-
-- `go-distributed-coordination v0.2.0`
-- `go-messaging v0.2.0`
-- `go-reconciliation v0.2.0`
-- `bbolt v1.3.11`
-
-Optional integrations must remain one-way: concrete adapters import these
-neutral contracts, never the reverse.
-
-## Development
-
-Run the repository gates with a standalone module context:
-
-```bash
-GOWORK=off go mod verify
-GOWORK=off go test -race ./...
-GOWORK=off go vet ./...
-(cd backend/postgres && GOWORK=off go vet ./... && GOWORK=off go test -race ./...)
-pre-commit run --all-files
-```
-
-Implementation plans live under `docs/` and are intentionally excluded from
-Git. They must never be committed.
+Changes go through pull requests against `main`; nothing is pushed to `main`
+directly. Read [AGENTS.md](AGENTS.md) first: it describes the docs-first
+process, the API rules, and the checks every pull request must pass.
 
 ## License
 
-Apache License 2.0. See [LICENSE](LICENSE).
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
