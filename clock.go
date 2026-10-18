@@ -2,7 +2,8 @@ package jobs
 
 import "time"
 
-// Clock supplies deterministic current time to clients and workers.
+// Clock supplies the current time to clients, workers, schedulers, and
+// recovery. Implementations must be safe for concurrent use.
 type Clock interface {
 	Now() time.Time
 }

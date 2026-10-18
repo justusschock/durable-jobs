@@ -11,7 +11,8 @@ import (
 // ScheduleID identifies one durable schedule.
 type ScheduleID string
 
-// Schedule describes a one-shot or fixed-interval job template.
+// Schedule describes a one-shot (zero Interval) or fixed-interval job
+// template. Revision is assigned by the ScheduleStore.
 type Schedule struct {
 	ID        ScheduleID
 	Request   EnqueueRequest
@@ -27,11 +28,23 @@ func (schedule Schedule) Clone() Schedule {
 	return schedule
 }
 
-// ScheduleStore atomically persists schedules with revision fencing.
+// ScheduleStore atomically persists schedules with revision fencing. The
+// storetest.RunSchedule suite defines the observable contract.
 type ScheduleStore interface {
+	// PutSchedule creates (expected revision 0) or replaces (expected
+	// current revision) a schedule and returns it with its new revision.
+	// Creating an existing schedule returns ErrJobExists, replacing a missing
+	// one ErrJobNotFound, and a mismatched revision ErrStaleAttempt.
 	PutSchedule(context.Context, Schedule, uint64) (Schedule, error)
+	// GetSchedule returns a schedule, or ErrJobNotFound.
 	GetSchedule(context.Context, ScheduleID) (Schedule, error)
+	// ListDueSchedules returns up to limit enabled schedules whose NextRunAt
+	// is at or before the given time, ordered by NextRunAt and ID.
 	ListDueSchedules(context.Context, time.Time, int) ([]Schedule, error)
+	// AdvanceSchedule moves the schedule's cursor forward to the given time,
+	// or disables it when the time is zero, if the revision is still current;
+	// otherwise it returns ErrStaleAttempt. A cursor that would not move
+	// forward returns ErrInvalidTransition.
 	AdvanceSchedule(context.Context, ScheduleID, uint64, time.Time) error
 }
 
@@ -42,12 +55,19 @@ type Scheduler struct {
 	clock  Clock
 }
 
-// NewScheduler constructs a durable schedule runner.
+// NewScheduler constructs a durable schedule runner. Nil dependencies are
+// reported by RunDue as ErrInvalidJob.
 func NewScheduler(store ScheduleStore, client Client, clock Clock) *Scheduler {
 	return &Scheduler{store: store, client: client, clock: clock}
 }
 
-// RunDue processes at most limit due schedules.
+// RunDue processes at most limit due schedules. Each occurrence is enqueued
+// with the ID "<schedule-id>/<due-unix-nano>" and AvailableAt set to its due
+// time, so a retry after a crash between enqueue and cursor advance is
+// idempotent. An interval schedule then advances to the first due time
+// strictly after now; a one-shot schedule is disabled. RunDue returns the
+// number of schedules processed and stops at the first enqueue or store
+// error without advancing that schedule.
 func (scheduler *Scheduler) RunDue(ctx context.Context, limit int) (int, error) {
 	if scheduler == nil || isNilDependency(scheduler.store) || isNilDependency(scheduler.client) || isNilDependency(scheduler.clock) {
 		return 0, fmt.Errorf("%w: nil scheduler dependency", ErrInvalidJob)

@@ -112,15 +112,45 @@ type Catalog interface {
 }
 
 // Store atomically persists durable jobs and their fenced execution attempts.
+//
+// Every method is atomic, safe for concurrent use, honors ctx, and returns
+// independently owned snapshots. The storetest.Run suite defines the full
+// observable contract; implementations must pass it.
 type Store interface {
+	// Create persists a new job, or returns ErrJobExists.
 	Create(context.Context, Job) (Job, error)
+	// Get returns a job, or ErrJobNotFound.
 	Get(context.Context, JobID) (Job, error)
+	// ListJobs returns up to Limit jobs of one queue, most recently updated
+	// first.
 	ListJobs(context.Context, ListJobsRequest) ([]Job, error)
+	// ClaimReady starts a new attempt for the first claimable job of the
+	// queue (pending or retry-waiting, available, all dependencies
+	// succeeded), ordered by priority descending, AvailableAt ascending, and
+	// ID ascending. It returns ErrNoReadyJob when none is claimable.
 	ClaimReady(context.Context, ClaimRequest) (Attempt, error)
+	// Heartbeat extends the current attempt's deadline. It returns
+	// ErrStaleAttempt for an old attempt or fence and ErrInvalidTransition
+	// for an earlier deadline or a job that is not running.
 	Heartbeat(context.Context, HeartbeatRequest) error
+	// Complete ends the current attempt as succeeded, or canceled when
+	// cancellation was requested, under the same fencing checks as Heartbeat.
 	Complete(context.Context, CompleteRequest) (Job, error)
+	// Fail records a failure of the current attempt: retry-waiting until
+	// NextAvailableAt while a retryable failure has attempts left, otherwise
+	// failed (or canceled when requested). Terminal outcomes fail pending
+	// dependents transitively.
 	Fail(context.Context, FailRequest) (Job, error)
+	// RequestCancel cancels a pending or retry-waiting job immediately and
+	// marks a running job for cancellation. Terminal jobs return
+	// ErrInvalidTransition.
 	RequestCancel(context.Context, JobID, time.Time) (Job, error)
+	// RecoverAttempt returns a running job whose observed attempt expired to
+	// pending (or canceled when requested). The attempt ID, fence, and
+	// observed deadline must all still be current.
 	RecoverAttempt(context.Context, RecoverAttemptRequest) (Job, error)
+	// ListRecoveryCandidates returns up to limit running attempts whose
+	// heartbeat deadline is at or before the given time, ordered by deadline
+	// and attempt ID.
 	ListRecoveryCandidates(context.Context, time.Time, int) ([]RecoveryCandidate, error)
 }

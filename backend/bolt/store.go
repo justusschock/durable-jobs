@@ -28,12 +28,20 @@ var (
 
 // Options configures Open.
 type Options struct {
-	Timeout  time.Duration
-	NoSync   bool
+	// Timeout bounds the wait for the database file lock; zero waits
+	// indefinitely.
+	Timeout time.Duration
+	// NoSync skips fsync after each commit. It trades crash safety for
+	// speed and is meant for tests.
+	NoSync bool
+	// ReadOnly opens an existing, initialized database without creating,
+	// initializing, chmodding, or writing it. Mutators then fail.
 	ReadOnly bool
 }
 
-// Store persists jobs and attempts in one bbolt database.
+// Store persists jobs, attempts, and schedules in one bbolt database. It is
+// safe for concurrent use by multiple goroutines; bbolt's file lock allows
+// one writable process per file.
 type Store struct {
 	db *bbolt.DB
 }

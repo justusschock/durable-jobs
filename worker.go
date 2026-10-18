@@ -10,18 +10,31 @@ import (
 	messaging "github.com/justusschock/go-messaging"
 )
 
-// WorkerOptions controls durable worker polling and lease behavior.
+// WorkerOptions controls durable worker polling and lease behavior. All
+// durations and ClaimLimit must be positive.
 type WorkerOptions struct {
-	WorkerID          string
-	Queues            []Queue
-	PollInterval      time.Duration
-	LeaseTTL          time.Duration
+	// WorkerID identifies the worker as lease owner and in attempts.
+	WorkerID string
+	// Queues are scanned in order on every poll.
+	Queues []Queue
+	// PollInterval is the pause between polls in Run.
+	PollInterval time.Duration
+	// LeaseTTL is the TTL of the claim and execution leases and the distance
+	// of each heartbeat deadline from the heartbeat time.
+	LeaseTTL time.Duration
+	// HeartbeatInterval is the period of store heartbeats and cancellation
+	// checks while a handler runs.
 	HeartbeatInterval time.Duration
-	ClaimLimit        int
-	Clock             Clock
+	// ClaimLimit bounds the jobs executed per queue per poll in Run.
+	ClaimLimit int
+	// Clock supplies the timestamps recorded in the store.
+	Clock Clock
 }
 
-// Worker claims and executes durable jobs with fenced attempts.
+// Worker claims and executes durable jobs with fenced attempts. A Worker
+// executes one job at a time; run several workers for parallelism. Handlers
+// receive a context that is canceled when the execution lease is lost, the
+// worker's context ends, or cancellation of the job is requested.
 type Worker struct {
 	store    Store
 	backend  coordination.Backend
@@ -60,7 +73,9 @@ func NewWorker(store Store, backend coordination.Backend, events messaging.Publi
 	return &Worker{store: store, backend: backend, events: events, registry: registry, options: options}, nil
 }
 
-// Run polls configured queues until ctx is canceled.
+// Run polls configured queues until ctx is canceled and then returns the
+// context's error. Each poll executes up to ClaimLimit jobs per queue. Store
+// and lease errors other than an unavailable lease or no ready job end Run.
 func (worker *Worker) Run(ctx context.Context) error {
 	for {
 		if err := ctx.Err(); err != nil {

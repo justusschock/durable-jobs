@@ -23,41 +23,67 @@ type Queue string
 // State is the durable job lifecycle state.
 type State uint8
 
+// Job states. StateSucceeded, StateFailed, and StateCanceled are terminal.
 const (
+	// StatePending jobs wait for AvailableAt and their dependencies.
 	StatePending State = iota + 1
+	// StateRunning jobs have a current fenced attempt.
 	StateRunning
+	// StateSucceeded jobs completed and hold their result.
 	StateSucceeded
+	// StateRetryWaiting jobs failed retryably and wait for AvailableAt.
 	StateRetryWaiting
+	// StateFailed jobs failed terminally or had a dependency fail.
 	StateFailed
+	// StateCanceled jobs were canceled before or during execution.
 	StateCanceled
 )
 
-// RetryPolicy controls bounded exponential retry scheduling.
+// RetryPolicy controls bounded exponential retry scheduling. See RetryDelay.
 type RetryPolicy struct {
-	MaxAttempts    uint
+	// MaxAttempts is the total number of attempts, including the first;
+	// it must be at least 1.
+	MaxAttempts uint
+	// InitialBackoff is the delay after the first failed attempt; it must be
+	// positive.
 	InitialBackoff time.Duration
-	MaxBackoff     time.Duration
-	Multiplier     float64
+	// MaxBackoff caps every delay; it must be at least InitialBackoff.
+	MaxBackoff time.Duration
+	// Multiplier scales the delay after each further failure; it must be a
+	// finite number of at least 1.
+	Multiplier float64
 }
 
-// Job is one independently owned durable job snapshot.
+// Job is one independently owned durable job snapshot. Stores normalize its
+// times to UTC without monotonic clock readings.
 type Job struct {
-	ID                    JobID
-	Queue                 Queue
-	Kind                  string
-	Payload               []byte
-	Headers               map[string]string
-	Priority              int
-	State                 State
-	CreatedAt             time.Time
-	AvailableAt           time.Time
-	UpdatedAt             time.Time
-	Attempt               uint
-	Retry                 RetryPolicy
-	DependsOn             []JobID
+	ID    JobID
+	Queue Queue
+	// Kind selects the Handler in the worker's Registry.
+	Kind    string
+	Payload []byte
+	Headers map[string]string
+	// Priority orders ready jobs in a queue; higher values are claimed first.
+	Priority int
+	State    State
+	// CreatedAt is the enqueue time.
+	CreatedAt time.Time
+	// AvailableAt is the earliest time the job may be claimed.
+	AvailableAt time.Time
+	// UpdatedAt is the latest transition time; it never moves backward.
+	UpdatedAt time.Time
+	// Attempt counts claims, starting at 1 for the first attempt.
+	Attempt uint
+	Retry   RetryPolicy
+	// DependsOn lists jobs that must succeed before this job is claimable.
+	DependsOn []JobID
+	// CancellationRequested is set by RequestCancel on a running job; the
+	// attempt then ends canceled.
 	CancellationRequested bool
-	Result                []byte
-	LastFailure           *Failure
+	// Result holds the handler output of a succeeded job.
+	Result []byte
+	// LastFailure is the most recent recorded failure, if any.
+	LastFailure *Failure
 }
 
 // Clone returns a job with independently owned payload, result, header,
@@ -74,7 +100,9 @@ func (job Job) Clone() Job {
 	return job
 }
 
-// EnqueueRequest describes one new durable job.
+// EnqueueRequest describes one new durable job. A zero AvailableAt makes the
+// job available at the client's current time. See ValidateEnqueue for the
+// invariants.
 type EnqueueRequest struct {
 	ID          JobID
 	Queue       Queue
@@ -107,7 +135,10 @@ func (result Result) Clone() Result {
 	return result
 }
 
-// Failure is a sanitized durable failure classification.
+// Failure is a sanitized durable failure classification. Workers record the
+// codes "handler_error" (retryable), "handler_panic", and "handler_not_found";
+// stores record "dependency_failed" when a prerequisite does not succeed.
+// Handler error values are never persisted.
 type Failure struct {
 	Code      string
 	Message   string

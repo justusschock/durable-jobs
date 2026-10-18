@@ -5,7 +5,9 @@ import (
 	"time"
 )
 
-// RetryDelay returns the bounded exponential delay before the next attempt.
+// RetryDelay returns the bounded exponential delay before the next attempt
+// after attempt failed: InitialBackoff * Multiplier^(attempt-1), capped at
+// MaxBackoff. Attempt 0 is treated as 1, and overflow saturates at MaxBackoff.
 func RetryDelay(policy RetryPolicy, attempt uint) time.Duration {
 	if attempt == 0 {
 		attempt = 1
