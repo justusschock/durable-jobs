@@ -108,46 +108,48 @@ func TestWorkerRunOneReturnsFalseWhenNoJobIsReady(t *testing.T) {
 func TestWorkerRunOneUsesQueueOrderAndExecutesAtMostOneJob(t *testing.T) {
 	t.Parallel()
 
-	store := newWorkerStore()
-	store.claimAttempts = map[jobs.Queue][]jobs.Attempt{
-		"third": {
-			workerAttemptInQueue("third-1", "third", 1),
-			workerAttemptInQueue("third-2", "third", 2),
-		},
-		"fourth": {workerAttemptInQueue("fourth-1", "fourth", 3)},
-	}
-	backend := newWorkerBackend()
-	backend.acquireErrors = map[int]error{0: coordination.ErrNotAcquired}
-	var handled []jobs.JobID
-	registry := newWorkerRegistry(t, "send-email", func(_ context.Context, job jobs.Job) (jobs.Result, error) {
-		handled = append(handled, job.ID)
-		return jobs.Result{}, nil
-	})
-	options := validWorkerOptions(workerClock{now: time.Unix(100, 0)})
-	options.Queues = []jobs.Queue{"first", "second", "third", "fourth"}
-	options.PollInterval = time.Hour
-	options.ClaimLimit = 10
-	worker := mustNewWorker(t, store, backend, &workerEventPublisher{}, registry, options)
+	synctest.Test(t, func(t *testing.T) {
+		store := newWorkerStore()
+		store.claimAttempts = map[jobs.Queue][]jobs.Attempt{
+			"third": {
+				workerAttemptInQueue("third-1", "third", 1),
+				workerAttemptInQueue("third-2", "third", 2),
+			},
+			"fourth": {workerAttemptInQueue("fourth-1", "fourth", 3)},
+		}
+		backend := newWorkerBackend()
+		backend.acquireErrors = map[int]error{0: coordination.ErrNotAcquired}
+		var handled []jobs.JobID
+		registry := newWorkerRegistry(t, "send-email", func(_ context.Context, job jobs.Job) (jobs.Result, error) {
+			handled = append(handled, job.ID)
+			return jobs.Result{}, nil
+		})
+		options := validWorkerOptions(workerClock{now: time.Unix(100, 0)})
+		options.Queues = []jobs.Queue{"first", "second", "third", "fourth"}
+		options.PollInterval = time.Hour
+		options.ClaimLimit = 10
+		worker := mustNewWorker(t, store, backend, &workerEventPublisher{}, registry, options)
 
-	claimed, err := worker.RunOne(context.Background())
-	if err != nil {
-		t.Fatalf("RunOne() error = %v", err)
-	}
-	if !claimed {
-		t.Fatal("RunOne() claimed = false, want true")
-	}
-	if len(store.claimRequests) != 2 || store.claimRequests[0].Queue != "second" || store.claimRequests[1].Queue != "third" {
-		t.Fatalf("ClaimReady() queue order = %#v, want second then third after first-queue lease contention", store.claimRequests)
-	}
-	if len(handled) != 1 || handled[0] != "third-1" {
-		t.Fatalf("handled jobs = %v, want only third-1", handled)
-	}
-	if remaining := len(store.claimAttempts["third"]); remaining != 1 {
-		t.Fatalf("remaining third-queue jobs = %d, want 1", remaining)
-	}
-	if remaining := len(store.claimAttempts["fourth"]); remaining != 1 {
-		t.Fatalf("remaining fourth-queue jobs = %d, want 1", remaining)
-	}
+		claimed, err := worker.RunOne(context.Background())
+		if err != nil {
+			t.Fatalf("RunOne() error = %v", err)
+		}
+		if !claimed {
+			t.Fatal("RunOne() claimed = false, want true")
+		}
+		if len(store.claimRequests) != 2 || store.claimRequests[0].Queue != "second" || store.claimRequests[1].Queue != "third" {
+			t.Fatalf("ClaimReady() queue order = %#v, want second then third after first-queue lease contention", store.claimRequests)
+		}
+		if len(handled) != 1 || handled[0] != "third-1" {
+			t.Fatalf("handled jobs = %v, want only third-1", handled)
+		}
+		if remaining := len(store.claimAttempts["third"]); remaining != 1 {
+			t.Fatalf("remaining third-queue jobs = %d, want 1", remaining)
+		}
+		if remaining := len(store.claimAttempts["fourth"]); remaining != 1 {
+			t.Fatalf("remaining fourth-queue jobs = %d, want 1", remaining)
+		}
+	})
 }
 
 func TestWorkerRunOneRejectsCanceledContextBeforeClaiming(t *testing.T) {
@@ -223,32 +225,34 @@ func TestWorkerRunOneHandlesSuccessErrorAndPanic(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			store := newWorkerStore()
-			worker := mustNewWorker(
-				t,
-				store,
-				newWorkerBackend(),
-				&workerEventPublisher{},
-				newWorkerRegistry(t, "send-email", test.handler),
-				validWorkerOptions(workerClock{now: time.Unix(100, 0)}),
-			)
+			synctest.Test(t, func(t *testing.T) {
+				store := newWorkerStore()
+				worker := mustNewWorker(
+					t,
+					store,
+					newWorkerBackend(),
+					&workerEventPublisher{},
+					newWorkerRegistry(t, "send-email", test.handler),
+					validWorkerOptions(workerClock{now: time.Unix(100, 0)}),
+				)
 
-			claimed, err := worker.RunOne(context.Background())
-			if err != nil {
-				t.Fatalf("RunOne() error = %v", err)
-			}
-			if !claimed {
-				t.Fatal("RunOne() claimed = false, want true")
-			}
-			if len(store.completeRequests) != test.wantComplete || len(store.failRequests) != test.wantFail {
-				t.Fatalf("terminal calls: complete=%d fail=%d, want complete=%d fail=%d", len(store.completeRequests), len(store.failRequests), test.wantComplete, test.wantFail)
-			}
-			if test.wantFail != 0 {
-				failure := store.failRequests[0].Failure
-				if failure.Code != test.wantCode || failure.Retryable != test.wantRetryable {
-					t.Fatalf("failure = %#v, want code=%q retryable=%t", failure, test.wantCode, test.wantRetryable)
+				claimed, err := worker.RunOne(context.Background())
+				if err != nil {
+					t.Fatalf("RunOne() error = %v", err)
 				}
-			}
+				if !claimed {
+					t.Fatal("RunOne() claimed = false, want true")
+				}
+				if len(store.completeRequests) != test.wantComplete || len(store.failRequests) != test.wantFail {
+					t.Fatalf("terminal calls: complete=%d fail=%d, want complete=%d fail=%d", len(store.completeRequests), len(store.failRequests), test.wantComplete, test.wantFail)
+				}
+				if test.wantFail != 0 {
+					failure := store.failRequests[0].Failure
+					if failure.Code != test.wantCode || failure.Retryable != test.wantRetryable {
+						t.Fatalf("failure = %#v, want code=%q retryable=%t", failure, test.wantCode, test.wantRetryable)
+					}
+				}
+			})
 		})
 	}
 }
@@ -397,28 +401,30 @@ func TestWorkerRunOneReportsClaimAfterPostClaimError(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
-			store := newWorkerStore()
-			backend := newWorkerBackend()
-			publisher := &workerEventPublisher{}
-			test.configure(store, backend, publisher)
-			worker := mustNewWorker(
-				t,
-				store,
-				backend,
-				publisher,
-				newWorkerRegistry(t, "send-email", func(context.Context, jobs.Job) (jobs.Result, error) {
-					return jobs.Result{}, nil
-				}),
-				validWorkerOptions(workerClock{now: time.Unix(100, 0)}),
-			)
+			synctest.Test(t, func(t *testing.T) {
+				store := newWorkerStore()
+				backend := newWorkerBackend()
+				publisher := &workerEventPublisher{}
+				test.configure(store, backend, publisher)
+				worker := mustNewWorker(
+					t,
+					store,
+					backend,
+					publisher,
+					newWorkerRegistry(t, "send-email", func(context.Context, jobs.Job) (jobs.Result, error) {
+						return jobs.Result{}, nil
+					}),
+					validWorkerOptions(workerClock{now: time.Unix(100, 0)}),
+				)
 
-			claimed, err := worker.RunOne(context.Background())
-			if !errors.Is(err, sentinel) {
-				t.Fatalf("RunOne() error = %v, want sentinel", err)
-			}
-			if !claimed {
-				t.Fatal("RunOne() claimed = false after durable claim, want true")
-			}
+				claimed, err := worker.RunOne(context.Background())
+				if !errors.Is(err, sentinel) {
+					t.Fatalf("RunOne() error = %v, want sentinel", err)
+				}
+				if !claimed {
+					t.Fatal("RunOne() claimed = false after durable claim, want true")
+				}
+			})
 		})
 	}
 }
