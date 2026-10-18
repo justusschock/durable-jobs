@@ -6,10 +6,68 @@ import (
 	"strconv"
 	"time"
 
+	coordinationmemory "github.com/justusschock/go-distributed-coordination/memory"
 	jobs "github.com/justusschock/go-durable-jobs"
 	"github.com/justusschock/go-durable-jobs/backend/memory"
 	messaging "github.com/justusschock/go-messaging"
+	messagingmemory "github.com/justusschock/go-messaging/memory"
 )
+
+// systemClock is the production jobs.Clock: it reads the wall clock.
+type systemClock struct{}
+
+func (systemClock) Now() time.Time { return time.Now() }
+
+// Example enqueues a job and runs it once with a worker. Production code would
+// use a persistent store (backend/bolt or backend/postgres), a distributed
+// coordination backend, and a real message broker.
+func Example() {
+	ctx := context.Background()
+	store := memory.New()
+
+	client, err := jobs.NewClient(store, messagingmemory.NewBroker[jobs.Wakeup](time.Second), systemClock{})
+	if err != nil {
+		panic(err)
+	}
+	if _, err := client.Enqueue(ctx, jobs.EnqueueRequest{
+		ID:      "greet-1",
+		Queue:   "default",
+		Kind:    "greet",
+		Payload: []byte("world"),
+		Retry:   jobs.RetryPolicy{MaxAttempts: 3, InitialBackoff: time.Second, MaxBackoff: time.Minute, Multiplier: 2},
+	}); err != nil {
+		panic(err)
+	}
+
+	registry := jobs.MapRegistry{
+		"greet": func(_ context.Context, job jobs.Job) (jobs.Result, error) {
+			return jobs.Result{Payload: append([]byte("hello, "), job.Payload...)}, nil
+		},
+	}
+	worker, err := jobs.NewWorker(store, coordinationmemory.NewBackend(nil), messagingmemory.NewBroker[jobs.Event](time.Second), registry, jobs.WorkerOptions{
+		WorkerID:          "worker-1",
+		Queues:            []jobs.Queue{"default"},
+		PollInterval:      time.Second,
+		LeaseTTL:          30 * time.Second,
+		HeartbeatInterval: 10 * time.Second,
+		ClaimLimit:        10,
+		Clock:             systemClock{},
+	})
+	if err != nil {
+		panic(err)
+	}
+	// Run(ctx) polls until ctx ends; RunOne executes at most one job.
+	if _, err := worker.RunOne(ctx); err != nil {
+		panic(err)
+	}
+
+	job, err := client.Get(ctx, "greet-1")
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(job.State == jobs.StateSucceeded, string(job.Result))
+	// Output: true hello, world
+}
 
 func ExampleDurableClient() {
 	now := time.Unix(100, 0).UTC()
