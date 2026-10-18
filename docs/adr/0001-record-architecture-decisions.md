@@ -10,7 +10,7 @@
 
 ## Context
 
-Recorded retrospectively for the first public release. go-durable-jobs grew
+Recorded retrospectively for the first public release. durable-jobs grew
 through many small changes whose rationale lived in commit messages and
 private planning notes. A public library needs its requirements and design
 decisions in the repository, where contributors and users can read them, and

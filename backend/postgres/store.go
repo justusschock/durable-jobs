@@ -21,9 +21,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	coordination "github.com/justusschock/go-distributed-coordination"
-	jobs "github.com/justusschock/go-durable-jobs"
-	"github.com/justusschock/go-durable-jobs/internal/storestate"
+	coordination "github.com/justusschock/distributed-coordination"
+	jobs "github.com/justusschock/durable-jobs"
+	"github.com/justusschock/durable-jobs/internal/storestate"
 )
 
 // DefaultSchema is the schema used when Options.Schema is empty.

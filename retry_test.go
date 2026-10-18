@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	jobs "github.com/justusschock/go-durable-jobs"
+	jobs "github.com/justusschock/durable-jobs"
 )
 
 // FR-JOBS-06

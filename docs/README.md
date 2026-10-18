@@ -1,4 +1,4 @@
-# go-durable-jobs documentation
+# durable-jobs documentation
 
 Requirements (PRDs) state *what* the library does; architecture decision
 records (ADRs) state *how and why*. The process is described in
@@ -10,7 +10,7 @@ records (ADRs) state *how and why*. The process is described in
 
 | PRD | Title | Status | Implementation |
 |---|---|---|---|
-| [PRD-0001](prd/0001-go-durable-jobs.md) | go-durable-jobs | Accepted | Complete |
+| [PRD-0001](prd/0001-durable-jobs.md) | durable-jobs | Accepted | Complete |
 
 ## Architecture decisions
 

@@ -8,8 +8,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	coordination "github.com/justusschock/go-distributed-coordination"
-	jobs "github.com/justusschock/go-durable-jobs"
+	coordination "github.com/justusschock/distributed-coordination"
+	jobs "github.com/justusschock/durable-jobs"
 )
 
 // CloneJob returns an independently owned job snapshot.

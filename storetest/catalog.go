@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	jobs "github.com/justusschock/go-durable-jobs"
+	jobs "github.com/justusschock/durable-jobs"
 )
 
 // RunCatalog executes the optional catalog contract against a fresh store for

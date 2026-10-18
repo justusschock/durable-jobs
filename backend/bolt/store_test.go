@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	jobs "github.com/justusschock/go-durable-jobs"
-	boltjobs "github.com/justusschock/go-durable-jobs/backend/bolt"
-	"github.com/justusschock/go-durable-jobs/storetest"
+	jobs "github.com/justusschock/durable-jobs"
+	boltjobs "github.com/justusschock/durable-jobs/backend/bolt"
+	"github.com/justusschock/durable-jobs/storetest"
 	bbolt "go.etcd.io/bbolt"
 )
 

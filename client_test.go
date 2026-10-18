@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	coordination "github.com/justusschock/go-distributed-coordination"
-	jobs "github.com/justusschock/go-durable-jobs"
-	"github.com/justusschock/go-durable-jobs/backend/memory"
-	messaging "github.com/justusschock/go-messaging"
+	coordination "github.com/justusschock/distributed-coordination"
+	jobs "github.com/justusschock/durable-jobs"
+	"github.com/justusschock/durable-jobs/backend/memory"
+	messaging "github.com/justusschock/messaging"
 )
 
 var _ jobs.Client = (*jobs.DurableClient)(nil)

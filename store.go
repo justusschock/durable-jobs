@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	coordination "github.com/justusschock/go-distributed-coordination"
+	coordination "github.com/justusschock/distributed-coordination"
 )
 
 // ClaimRequest identifies a worker's request to claim one ready job.

@@ -40,11 +40,11 @@ dependency of the core module becomes a dependency of every user.
 
 We will use the standard library first and allow these dependencies:
 
-- `github.com/justusschock/go-distributed-coordination`: leases, fencing
+- `github.com/justusschock/distributed-coordination`: leases, fencing
   tokens, keep-alive, and the in-memory coordination backend used in tests.
-- `github.com/justusschock/go-messaging`: typed publishers and envelopes for
+- `github.com/justusschock/messaging`: typed publishers and envelopes for
   wakeups and lifecycle events.
-- `github.com/justusschock/go-reconciliation`: the observe/plan/apply engine
+- `github.com/justusschock/reconciliation`: the observe/plan/apply engine
   behind recovery.
 - `go.etcd.io/bbolt`: embedded, transactional, crash-safe key-value store for
   the single-process backend. It is small and pure Go.

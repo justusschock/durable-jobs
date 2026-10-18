@@ -6,11 +6,11 @@ import (
 	"strconv"
 	"time"
 
-	coordinationmemory "github.com/justusschock/go-distributed-coordination/memory"
-	jobs "github.com/justusschock/go-durable-jobs"
-	"github.com/justusschock/go-durable-jobs/backend/memory"
-	messaging "github.com/justusschock/go-messaging"
-	messagingmemory "github.com/justusschock/go-messaging/memory"
+	coordinationmemory "github.com/justusschock/distributed-coordination/memory"
+	jobs "github.com/justusschock/durable-jobs"
+	"github.com/justusschock/durable-jobs/backend/memory"
+	messaging "github.com/justusschock/messaging"
+	messagingmemory "github.com/justusschock/messaging/memory"
 )
 
 // systemClock is the production jobs.Clock: it reads the wall clock.

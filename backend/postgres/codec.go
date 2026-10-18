@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	coordination "github.com/justusschock/go-distributed-coordination"
-	jobs "github.com/justusschock/go-durable-jobs"
-	"github.com/justusschock/go-durable-jobs/internal/storestate"
+	coordination "github.com/justusschock/distributed-coordination"
+	jobs "github.com/justusschock/durable-jobs"
+	"github.com/justusschock/durable-jobs/internal/storestate"
 )
 
 // splitTime normalizes value like the other stores and splits it into the

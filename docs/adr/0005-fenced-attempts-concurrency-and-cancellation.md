@@ -45,7 +45,7 @@ outcome. Handlers must stop promptly when their work is no longer wanted.
 We will execute jobs at least once under fenced attempts:
 
 - A worker acquires a non-waiting per-queue claim lease
-  (`jobs/queue/<queue>/claim`) from `go-distributed-coordination`, passes its
+  (`jobs/queue/<queue>/claim`) from `distributed-coordination`, passes its
   fencing token to `ClaimReady`, and releases the lease. The store records
   the token and increments the job's attempt generation.
 - The worker then holds a non-waiting per-job execution lease

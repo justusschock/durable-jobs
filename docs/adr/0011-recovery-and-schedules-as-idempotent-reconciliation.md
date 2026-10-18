@@ -28,7 +28,7 @@ another scheduler instance.
    - Pro: simple.
    - Con: no observe/plan separation; harder to bound and to test; races
      with heartbeats unless the store re-checks every condition.
-2. **Recovery as a `go-reconciliation` adapter with fenced apply**.
+2. **Recovery as a `reconciliation` adapter with fenced apply**.
    - Pro: observe, deterministic plan (sorted, limited), and apply steps are
      separately testable; the engine provides retries and policy; each apply
      is a compare-and-swap on attempt ID, fencing token and observed
@@ -42,7 +42,7 @@ another scheduler instance.
 
 ## Decision
 
-We will implement recovery as `RecoveryAdapter` for `go-reconciliation`
+We will implement recovery as `RecoveryAdapter` for `reconciliation`
 (`Observe` lists expired attempts, `Plan` filters, sorts by attempt ID and
 limits, `Apply` calls `RecoverAttempt` with the observed attempt ID, token
 and deadline, treating `ErrStaleAttempt` and `ErrInvalidTransition` as

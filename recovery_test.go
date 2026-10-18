@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	coordination "github.com/justusschock/go-distributed-coordination"
-	jobs "github.com/justusschock/go-durable-jobs"
-	reconciliation "github.com/justusschock/go-reconciliation"
+	coordination "github.com/justusschock/distributed-coordination"
+	jobs "github.com/justusschock/durable-jobs"
+	reconciliation "github.com/justusschock/reconciliation"
 )
 
 var _ reconciliation.Adapter[jobs.RecoverySpec, jobs.RecoveryObserved, jobs.RecoveryAction, jobs.RecoveryAction] = jobs.RecoveryAdapter{}

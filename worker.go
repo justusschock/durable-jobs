@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	coordination "github.com/justusschock/go-distributed-coordination"
-	messaging "github.com/justusschock/go-messaging"
+	coordination "github.com/justusschock/distributed-coordination"
+	messaging "github.com/justusschock/messaging"
 )
 
 // WorkerOptions controls durable worker polling and lease behavior. All

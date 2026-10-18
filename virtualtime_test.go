@@ -9,11 +9,11 @@ import (
 	"testing/synctest"
 	"time"
 
-	coordinationmemory "github.com/justusschock/go-distributed-coordination/memory"
-	jobs "github.com/justusschock/go-durable-jobs"
-	"github.com/justusschock/go-durable-jobs/backend/memory"
-	messaging "github.com/justusschock/go-messaging"
-	reconciliation "github.com/justusschock/go-reconciliation"
+	coordinationmemory "github.com/justusschock/distributed-coordination/memory"
+	jobs "github.com/justusschock/durable-jobs"
+	"github.com/justusschock/durable-jobs/backend/memory"
+	messaging "github.com/justusschock/messaging"
+	reconciliation "github.com/justusschock/reconciliation"
 )
 
 // The tests in this file run the real memory store, the real in-memory

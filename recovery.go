@@ -7,8 +7,8 @@ import (
 	"sort"
 	"time"
 
-	coordination "github.com/justusschock/go-distributed-coordination"
-	reconciliation "github.com/justusschock/go-reconciliation"
+	coordination "github.com/justusschock/distributed-coordination"
+	reconciliation "github.com/justusschock/reconciliation"
 )
 
 // RecoverySpec bounds the number of expired attempts recovered in one plan.

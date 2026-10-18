@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	jobs "github.com/justusschock/go-durable-jobs"
-	"github.com/justusschock/go-durable-jobs/backend/memory"
+	jobs "github.com/justusschock/durable-jobs"
+	"github.com/justusschock/durable-jobs/backend/memory"
 )
 
 // FR-JOBS-10

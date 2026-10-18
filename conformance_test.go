@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	jobs "github.com/justusschock/go-durable-jobs"
-	boltjobs "github.com/justusschock/go-durable-jobs/backend/bolt"
-	messaging "github.com/justusschock/go-messaging"
+	jobs "github.com/justusschock/durable-jobs"
+	boltjobs "github.com/justusschock/durable-jobs/backend/bolt"
+	messaging "github.com/justusschock/messaging"
 )
 
 // FR-JOBS-15

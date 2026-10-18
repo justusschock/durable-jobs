@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	coordination "github.com/justusschock/go-distributed-coordination"
-	jobs "github.com/justusschock/go-durable-jobs"
+	coordination "github.com/justusschock/distributed-coordination"
+	jobs "github.com/justusschock/durable-jobs"
 )
 
 // Run executes the store contract against a fresh store for each subtest.

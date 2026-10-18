@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	jobs "github.com/justusschock/go-durable-jobs"
+	jobs "github.com/justusschock/durable-jobs"
 )
 
 // FR-JOBS-19

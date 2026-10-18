@@ -59,7 +59,7 @@ We will use these formats:
   ordering matches Go's bytewise comparison, and headers, failures and
   snapshots as JSON.
 - The PostgreSQL store lives in the nested module
-  `github.com/justusschock/go-durable-jobs/backend/postgres`. Its `go.mod`
+  `github.com/justusschock/durable-jobs/backend/postgres`. Its `go.mod`
   replaces the core module with `../..` for development inside the
   repository; the replace directive does not apply to consumers. Releases tag
   the core module (`vX.Y.Z`) first, then update the nested module's

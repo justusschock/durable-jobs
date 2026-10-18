@@ -9,10 +9,10 @@ import (
 	"testing/synctest"
 	"time"
 
-	coordination "github.com/justusschock/go-distributed-coordination"
-	coordinationmemory "github.com/justusschock/go-distributed-coordination/memory"
-	jobs "github.com/justusschock/go-durable-jobs"
-	messaging "github.com/justusschock/go-messaging"
+	coordination "github.com/justusschock/distributed-coordination"
+	coordinationmemory "github.com/justusschock/distributed-coordination/memory"
+	jobs "github.com/justusschock/durable-jobs"
+	messaging "github.com/justusschock/messaging"
 )
 
 const workerTestTimeout = 500 * time.Millisecond

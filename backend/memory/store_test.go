@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	jobs "github.com/justusschock/go-durable-jobs"
-	"github.com/justusschock/go-durable-jobs/storetest"
+	jobs "github.com/justusschock/durable-jobs"
+	"github.com/justusschock/durable-jobs/storetest"
 )
 
 var _ jobs.Catalog = (*Store)(nil)

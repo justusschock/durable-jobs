@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"reflect"
 
-	messaging "github.com/justusschock/go-messaging"
+	messaging "github.com/justusschock/messaging"
 )
 
 // Client exposes durable job submission and cancellation operations.

@@ -59,9 +59,9 @@ We will keep the job model, contracts and runtime types in the root package
 - Time is injected through the one-method `Clock` interface; handlers are
   plain functions (`Handler`) resolved by a `Registry`, with `MapRegistry` as
   the default.
-- Messaging uses the generic `messaging.Publisher[T]` from `go-messaging`, so
+- Messaging uses the generic `messaging.Publisher[T]` from `messaging`, so
   wakeups and events are typed (`Publisher[Wakeup]`, `Publisher[Event]`).
-- Recovery is exposed as a `go-reconciliation` adapter (`RecoveryAdapter`)
+- Recovery is exposed as a `reconciliation` adapter (`RecoveryAdapter`)
   plus a convenience constructor returning the typed engine.
 - Data types (`Job`, `EnqueueRequest`, `Schedule`, requests and results) are
   plain structs with `Clone` methods; identities are distinct string types

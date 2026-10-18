@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	jobs "github.com/justusschock/go-durable-jobs"
+	jobs "github.com/justusschock/durable-jobs"
 )
 
 // RunSchedule executes the jobs.ScheduleStore contract against a fresh store

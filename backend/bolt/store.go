@@ -12,9 +12,9 @@ import (
 	"sort"
 	"time"
 
-	coordination "github.com/justusschock/go-distributed-coordination"
-	jobs "github.com/justusschock/go-durable-jobs"
-	"github.com/justusschock/go-durable-jobs/internal/storestate"
+	coordination "github.com/justusschock/distributed-coordination"
+	jobs "github.com/justusschock/durable-jobs"
+	"github.com/justusschock/durable-jobs/internal/storestate"
 	bbolt "go.etcd.io/bbolt"
 )
 

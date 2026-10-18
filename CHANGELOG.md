@@ -50,5 +50,5 @@ module (`backend/postgres/v0.7.0`), the public `storetest` contract suites,
 `Worker.RunOne`, the read-only job catalog, durable schedules and
 dependency workflows, fenced recovery, and the memory and bbolt stores.
 
-[Unreleased]: https://github.com/justusschock/go-durable-jobs/compare/v0.7.0...HEAD
-[0.7.0]: https://github.com/justusschock/go-durable-jobs/releases/tag/v0.7.0
+[Unreleased]: https://github.com/justusschock/durable-jobs/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/justusschock/durable-jobs/releases/tag/v0.7.0

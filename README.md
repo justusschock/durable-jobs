@@ -1,6 +1,6 @@
-# go-durable-jobs
+# durable-jobs
 
-`go-durable-jobs` is a Go library for durable background jobs: jobs are
+`durable-jobs` is a Go library for durable background jobs: jobs are
 persisted before anything else happens, claimed atomically, executed under
 fenced leases with heartbeats, retried with bounded exponential backoff,
 recovered when a worker disappears, and scheduled once or at fixed intervals.
@@ -18,14 +18,14 @@ single process with an embedded database to many replicas sharing PostgreSQL.
   handler panics and missing handlers are recorded as non-retryable failures.
 - Cooperative cancellation of pending and running jobs.
 - `NewRecoveryEngine`: returns expired attempts to their queue through a
-  fenced compare-and-swap, built on `go-reconciliation`.
+  fenced compare-and-swap, built on `reconciliation`.
 - `Scheduler`: one-shot and fixed-interval schedules with idempotent
   occurrence IDs and revision-fenced cursors.
 - Dependency workflows (`DependsOn`): a job runs only after its prerequisites
   succeed; failed or canceled prerequisites fail their dependents transitively.
 - `Catalog`: bounded, queue-scoped, cursor-paginated job listing for
   operator tools.
-- Typed lifecycle `Event`s published through `go-messaging`.
+- Typed lifecycle `Event`s published through `messaging`.
 - Three stores with identical semantics: in-memory, bbolt (embedded,
   crash-safe) and PostgreSQL (multi-replica), all verified by the public
   `storetest` contract suites.
@@ -33,9 +33,9 @@ single process with an embedded database to many replicas sharing PostgreSQL.
 ## Installation
 
 ```sh
-go get github.com/justusschock/go-durable-jobs@latest
+go get github.com/justusschock/durable-jobs@latest
 # optional, PostgreSQL store (separate module, pulls in pgx):
-go get github.com/justusschock/go-durable-jobs/backend/postgres@latest
+go get github.com/justusschock/durable-jobs/backend/postgres@latest
 ```
 
 Requires Go 1.25 or newer. The PostgreSQL store requires PostgreSQL 12 or
@@ -53,10 +53,10 @@ import (
 	"fmt"
 	"time"
 
-	coordinationmemory "github.com/justusschock/go-distributed-coordination/memory"
-	jobs "github.com/justusschock/go-durable-jobs"
-	"github.com/justusschock/go-durable-jobs/backend/memory"
-	messagingmemory "github.com/justusschock/go-messaging/memory"
+	coordinationmemory "github.com/justusschock/distributed-coordination/memory"
+	jobs "github.com/justusschock/durable-jobs"
+	"github.com/justusschock/durable-jobs/backend/memory"
+	messagingmemory "github.com/justusschock/messaging/memory"
 )
 
 // systemClock is the production jobs.Clock: it reads the wall clock.
@@ -113,15 +113,15 @@ func main() {
 ```
 
 In production, use `backend/bolt` or `backend/postgres` as the store, a
-distributed `go-distributed-coordination` backend for leases, and a real
-`go-messaging` publisher. [`ExampleDurableClient`](example_test.go) and
+distributed `distributed-coordination` backend for leases, and a real
+`messaging` publisher. [`ExampleDurableClient`](example_test.go) and
 [`ExampleScheduler`](example_test.go) show enqueueing and schedules.
 
 ## Packages
 
 | Package | Purpose |
 |---|---|
-| `github.com/justusschock/go-durable-jobs` (package `jobs`) | Job model, `Store`/`Catalog`/`ScheduleStore` contracts, `DurableClient`, `Worker`, `Scheduler`, recovery engine, errors and events. |
+| `github.com/justusschock/durable-jobs` (package `jobs`) | Job model, `Store`/`Catalog`/`ScheduleStore` contracts, `DurableClient`, `Worker`, `Scheduler`, recovery engine, errors and events. |
 | `.../backend/memory` | Mutex-backed in-memory store for tests and local use. |
 | `.../backend/bolt` | Crash-safe bbolt store for single-process persistence, with a read-only inspection mode. |
 | `.../backend/postgres` | PostgreSQL store for multi-process and multi-replica deployments (nested module). |
@@ -217,7 +217,7 @@ repository, replaces it with `../..`; that replace directive has no effect on
 consumers. Release them in order:
 
 1. Tag the core module, `vX.Y.Z`.
-2. In `backend/postgres/go.mod`, require `github.com/justusschock/go-durable-jobs vX.Y.Z`,
+2. In `backend/postgres/go.mod`, require `github.com/justusschock/durable-jobs vX.Y.Z`,
    run `go mod tidy`, and merge.
 3. Tag `backend/postgres/vX.Y.Z` on that commit.
 
@@ -227,8 +227,8 @@ Use the same version for both modules.
 
 - Requirements and design decisions: [docs/README.md](docs/README.md) (PRD and
   ADRs).
-- API reference: [pkg.go.dev/github.com/justusschock/go-durable-jobs](https://pkg.go.dev/github.com/justusschock/go-durable-jobs)
-  and [the PostgreSQL module](https://pkg.go.dev/github.com/justusschock/go-durable-jobs/backend/postgres).
+- API reference: [pkg.go.dev/github.com/justusschock/durable-jobs](https://pkg.go.dev/github.com/justusschock/durable-jobs)
+  and [the PostgreSQL module](https://pkg.go.dev/github.com/justusschock/durable-jobs/backend/postgres).
 
 ## Contributing
 

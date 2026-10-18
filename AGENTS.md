@@ -1,10 +1,10 @@
 # AGENTS.md
 
-Rules for anyone, human or agent, changing go-durable-jobs. They are binding.
+Rules for anyone, human or agent, changing durable-jobs. They are binding.
 If a change has to break one, say so in the pull request and, where it is a
 design decision, record it in an ADR.
 
-go-durable-jobs is a Go library for durable background jobs with fenced
+durable-jobs is a Go library for durable background jobs with fenced
 execution attempts, retries, recovery, schedules and dependency workflows. Its
 requirements and design decisions are recorded in [docs/](docs/README.md).
 
@@ -54,14 +54,14 @@ No behaviour is added or changed before the documents that govern it say so.
 
 The repository holds two Go modules.
 
-- `.` (module `github.com/justusschock/go-durable-jobs`, package `jobs`): job
+- `.` (module `github.com/justusschock/durable-jobs`, package `jobs`): job
   model, `Store`, `Catalog` and `ScheduleStore` contracts, `DurableClient`,
   `Worker`, `Scheduler`, recovery engine, sentinel errors, lifecycle events.
 - `backend/memory/`: mutex-backed in-memory store for tests and local use.
 - `backend/bolt/`: crash-safe bbolt store; owns the bbolt persistence format
   (versioned JSON envelopes).
 - `backend/postgres/` (nested module
-  `github.com/justusschock/go-durable-jobs/backend/postgres`): PostgreSQL
+  `github.com/justusschock/durable-jobs/backend/postgres`): PostgreSQL
   store and embedded SQL migrations (`migrations/NNNN_*.sql`, append-only).
   Its `go.mod` replaces the core module with `../..` for development.
 - `storetest/`: contract suites (`Run`, `RunCatalog`, `RunSchedule`) every
@@ -74,7 +74,7 @@ The repository holds two Go modules.
 1. **Small, explicit contracts.** Every exported type and function documents
    its behaviour, errors, concurrency safety and cancellation.
 2. **Dependencies.** Standard library first. The core module depends only on
-   `go-distributed-coordination`, `go-messaging`, `go-reconciliation` and
+   `distributed-coordination`, `messaging`, `reconciliation` and
    `go.etcd.io/bbolt` (ADR-0003); `pgx` is confined to the `backend/postgres`
    module. A new dependency needs an ADR.
 3. **Errors.** Sentinel errors and typed errors are part of the API; wrap

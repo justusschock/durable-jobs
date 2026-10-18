@@ -15,10 +15,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	coordination "github.com/justusschock/go-distributed-coordination"
-	jobs "github.com/justusschock/go-durable-jobs"
-	pgjobs "github.com/justusschock/go-durable-jobs/backend/postgres"
-	"github.com/justusschock/go-durable-jobs/storetest"
+	coordination "github.com/justusschock/distributed-coordination"
+	jobs "github.com/justusschock/durable-jobs"
+	pgjobs "github.com/justusschock/durable-jobs/backend/postgres"
+	"github.com/justusschock/durable-jobs/storetest"
 )
 
 // dsnVariable names the connection string for an empty, disposable test

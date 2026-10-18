@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	jobs "github.com/justusschock/go-durable-jobs"
-	boltjobs "github.com/justusschock/go-durable-jobs/backend/bolt"
-	"github.com/justusschock/go-durable-jobs/backend/memory"
-	"github.com/justusschock/go-durable-jobs/storetest"
+	jobs "github.com/justusschock/durable-jobs"
+	boltjobs "github.com/justusschock/durable-jobs/backend/bolt"
+	"github.com/justusschock/durable-jobs/backend/memory"
+	"github.com/justusschock/durable-jobs/storetest"
 )
 
 // FR-JOBS-09, FR-JOBS-17

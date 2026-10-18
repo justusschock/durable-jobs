@@ -1,4 +1,4 @@
-# PRD 0001: go-durable-jobs
+# PRD 0001: durable-jobs
 
 | Field | Value |
 |---|---|
@@ -19,13 +19,13 @@ that work in a goroutine loses it on a crash or restart, and naïve database
 queues lose results or run a job twice concurrently when a worker stalls and
 its job is handed to another worker.
 
-go-durable-jobs provides durable background jobs as a library: jobs are
+durable-jobs provides durable background jobs as a library: jobs are
 persisted before anything else happens, claimed atomically, executed under
 fenced leases so that a worker that lost ownership can never commit a result,
 retried with bounded backoff, recovered when their worker disappears, and
 scheduled once or at fixed intervals. It builds on three sibling libraries:
-`go-distributed-coordination` (leases and fencing tokens), `go-messaging`
-(wakeups and lifecycle events) and `go-reconciliation` (the recovery engine).
+`distributed-coordination` (leases and fencing tokens), `messaging`
+(wakeups and lifecycle events) and `reconciliation` (the recovery engine).
 
 ## 2. Users and use cases
 
