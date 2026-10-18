@@ -11,6 +11,7 @@ import (
 	messaging "github.com/justusschock/go-messaging"
 )
 
+// FR-JOBS-15
 func TestEnqueueRunRetryRecoverAndComplete(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "jobs.db")
 	store, err := boltjobs.Open(path, boltjobs.Options{Timeout: time.Second})

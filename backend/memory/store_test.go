@@ -11,6 +11,7 @@ import (
 
 var _ jobs.Catalog = (*Store)(nil)
 
+// FR-JOBS-17
 func TestStoreContract(t *testing.T) {
 	storetest.Run(t, func(t *testing.T) jobs.Store {
 		t.Helper()
@@ -18,6 +19,7 @@ func TestStoreContract(t *testing.T) {
 	})
 }
 
+// FR-JOBS-11, FR-JOBS-17
 func TestCatalogContract(t *testing.T) {
 	storetest.RunCatalog(t, func(t *testing.T) (jobs.Store, jobs.Catalog) {
 		t.Helper()
@@ -26,6 +28,7 @@ func TestCatalogContract(t *testing.T) {
 	})
 }
 
+// FR-JOBS-11
 func TestListJobPageRejectsMismatchedMapKey(t *testing.T) {
 	store := New()
 	store.jobs["map-key"] = jobs.Job{ID: "embedded-id", Queue: "queue"}

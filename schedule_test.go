@@ -15,6 +15,7 @@ import (
 	"github.com/justusschock/go-durable-jobs/storetest"
 )
 
+// FR-JOBS-09, FR-JOBS-17
 func TestScheduleStoreContract(t *testing.T) {
 	t.Run("memory", func(t *testing.T) {
 		storetest.RunSchedule(t, func(t *testing.T) jobs.ScheduleStore {
@@ -35,6 +36,7 @@ func TestScheduleStoreContract(t *testing.T) {
 	})
 }
 
+// FR-JOBS-09
 func TestBoltScheduleSurvivesReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "jobs.db")
 	store, err := boltjobs.Open(path, boltjobs.Options{Timeout: time.Second})
@@ -63,6 +65,7 @@ func TestBoltScheduleSurvivesReopen(t *testing.T) {
 	}
 }
 
+// FR-JOBS-09
 func TestSchedulerAdvancesFromPreviousDueTime(t *testing.T) {
 	store := memory.New()
 	client := &scheduleRecordingClient{}
@@ -97,6 +100,7 @@ func TestSchedulerAdvancesFromPreviousDueTime(t *testing.T) {
 	}
 }
 
+// FR-JOBS-09
 func TestSchedulerOneShotDisablesAfterEnqueue(t *testing.T) {
 	store := memory.New()
 	client := &scheduleRecordingClient{}
@@ -121,6 +125,7 @@ func TestSchedulerOneShotDisablesAfterEnqueue(t *testing.T) {
 	}
 }
 
+// FR-JOBS-09
 func TestSchedulerAdvancesAfterIdempotentOccurrenceConflict(t *testing.T) {
 	store := memory.New()
 	due := time.Unix(100, 0).UTC()
@@ -146,6 +151,7 @@ func TestSchedulerAdvancesAfterIdempotentOccurrenceConflict(t *testing.T) {
 	}
 }
 
+// FR-JOBS-09
 func TestSchedulerDoesNotAdvanceAfterEnqueueFailure(t *testing.T) {
 	store := memory.New()
 	due := time.Unix(100, 0).UTC()

@@ -17,6 +17,7 @@ import (
 	bbolt "go.etcd.io/bbolt"
 )
 
+// FR-JOBS-17
 func TestStoreContract(t *testing.T) {
 	storetest.Run(t, func(t *testing.T) jobs.Store {
 		t.Helper()
@@ -33,6 +34,7 @@ func TestStoreContract(t *testing.T) {
 	})
 }
 
+// FR-JOBS-11, FR-JOBS-17
 func TestCatalogContract(t *testing.T) {
 	storetest.RunCatalog(t, func(t *testing.T) (jobs.Store, jobs.Catalog) {
 		t.Helper()
@@ -49,6 +51,7 @@ func TestCatalogContract(t *testing.T) {
 	})
 }
 
+// FR-JOBS-11
 func TestCatalogPersistsAcrossReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "jobs.db")
 	first, err := boltjobs.Open(path, boltjobs.Options{Timeout: time.Second})
@@ -83,6 +86,7 @@ func TestCatalogPersistsAcrossReopen(t *testing.T) {
 	}
 }
 
+// FR-JOBS-11
 func TestCatalogScansSparseQueueEntries(t *testing.T) {
 	store, err := boltjobs.Open(filepath.Join(t.TempDir(), "jobs.db"), boltjobs.Options{Timeout: time.Second})
 	if err != nil {
@@ -125,6 +129,7 @@ func TestCatalogScansSparseQueueEntries(t *testing.T) {
 	}
 }
 
+// FR-JOBS-11
 func TestCatalogRejectsMismatchedBucketKeyAndJobID(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "jobs.db")
 	store, err := boltjobs.Open(path, boltjobs.Options{Timeout: time.Second})
@@ -168,6 +173,7 @@ func TestCatalogRejectsMismatchedBucketKeyAndJobID(t *testing.T) {
 	}
 }
 
+// FR-JOBS-15
 func TestPersistsAcrossReopen(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "jobs.db")
 	location := time.FixedZone("test", 5*60*60+30*60)
@@ -252,6 +258,7 @@ func TestPersistsAcrossReopen(t *testing.T) {
 	}
 }
 
+// NFR-JOBS-06
 func TestDatabaseFileMode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "jobs.db")
 	store, err := boltjobs.Open(path, boltjobs.Options{Timeout: time.Second})
@@ -273,6 +280,7 @@ func TestDatabaseFileMode(t *testing.T) {
 	}
 }
 
+// FR-JOBS-15
 func TestReadOnlyReadsWithoutChangingDatabase(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "jobs.db")
 	writable, err := boltjobs.Open(path, boltjobs.Options{Timeout: time.Second})
@@ -436,6 +444,7 @@ func TestReadOnlyRejectsIncompleteSchemaWithoutRepair(t *testing.T) {
 	}
 }
 
+// NFR-JOBS-06
 func TestReadOnlyOwnerModes(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix permission bits are not authoritative on Windows")
@@ -524,6 +533,7 @@ func TestReadOnlyRejectsSymlinks(t *testing.T) {
 	})
 }
 
+// FR-JOBS-15
 func TestReadOnlyMutatorsReturnDatabaseReadOnly(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "jobs.db")
 	initializeBoltDatabase(t, path)
@@ -630,6 +640,7 @@ func TestReadOnlyLocksAndReopen(t *testing.T) {
 	}
 }
 
+// FR-JOBS-15
 func TestOpenRejectsDatabaseSymlink(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target.db")
@@ -729,6 +740,7 @@ func TestCloseAllowsImmediateReopen(t *testing.T) {
 	}
 }
 
+// FR-JOBS-15
 func TestOpenRejectsIncompleteSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "jobs.db")
 	db, err := bbolt.Open(path, 0o600, nil)
@@ -776,6 +788,7 @@ func TestOpenRejectsIncompleteSchema(t *testing.T) {
 	}
 }
 
+// FR-JOBS-15
 func TestBoltRejectsUnknownEnvelopeVersion(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "jobs.db")
 	store, err := boltjobs.Open(path, boltjobs.Options{Timeout: time.Second})

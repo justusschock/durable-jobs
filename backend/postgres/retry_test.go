@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+// NFR-JOBS-07
 func TestRetryTransientBacksOffExponentiallyUntilSuccess(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		start := time.Now()
@@ -32,6 +33,7 @@ func TestRetryTransientBacksOffExponentiallyUntilSuccess(t *testing.T) {
 	})
 }
 
+// NFR-JOBS-07
 func TestRetryTransientCapsBackoffAndBoundsAttempts(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		start := time.Now()
@@ -54,6 +56,7 @@ func TestRetryTransientCapsBackoffAndBoundsAttempts(t *testing.T) {
 	})
 }
 
+// NFR-JOBS-07
 func TestRetryTransientReturnsPermanentErrorsImmediately(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		start := time.Now()
@@ -77,6 +80,7 @@ func TestRetryTransientReturnsPermanentErrorsImmediately(t *testing.T) {
 	})
 }
 
+// NFR-JOBS-07
 func TestRetryTransientStopsWhenContextEndsDuringBackoff(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Millisecond)

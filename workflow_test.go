@@ -10,6 +10,7 @@ import (
 	"github.com/justusschock/go-durable-jobs/backend/memory"
 )
 
+// FR-JOBS-10
 func TestValidateDependencies(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()

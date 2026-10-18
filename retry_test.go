@@ -7,6 +7,7 @@ import (
 	jobs "github.com/justusschock/go-durable-jobs"
 )
 
+// FR-JOBS-06
 func TestRetryDelayUsesBaseDelayForFirstAttempt(t *testing.T) {
 	t.Parallel()
 
@@ -21,6 +22,7 @@ func TestRetryDelayUsesBaseDelayForFirstAttempt(t *testing.T) {
 	}
 }
 
+// FR-JOBS-06
 func TestRetryDelayCapsExponentialBackoff(t *testing.T) {
 	t.Parallel()
 
@@ -35,6 +37,7 @@ func TestRetryDelayCapsExponentialBackoff(t *testing.T) {
 	}
 }
 
+// FR-JOBS-06
 func TestRetryDelaySaturatesWithoutOverflow(t *testing.T) {
 	t.Parallel()
 

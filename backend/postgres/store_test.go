@@ -25,6 +25,7 @@ import (
 // database. Tests skip when it is unset.
 const dsnVariable = "DURABLE_JOBS_POSTGRES_DSN"
 
+// FR-JOBS-17
 func TestStoreContract(t *testing.T) {
 	storetest.Run(t, func(t *testing.T) jobs.Store {
 		t.Helper()
@@ -32,6 +33,7 @@ func TestStoreContract(t *testing.T) {
 	})
 }
 
+// FR-JOBS-11, FR-JOBS-17
 func TestCatalogContract(t *testing.T) {
 	storetest.RunCatalog(t, func(t *testing.T) (jobs.Store, jobs.Catalog) {
 		t.Helper()
@@ -40,6 +42,7 @@ func TestCatalogContract(t *testing.T) {
 	})
 }
 
+// FR-JOBS-09, FR-JOBS-17
 func TestScheduleStoreContract(t *testing.T) {
 	storetest.RunSchedule(t, func(t *testing.T) jobs.ScheduleStore {
 		t.Helper()
@@ -67,6 +70,7 @@ func TestOpenValidation(t *testing.T) {
 	}
 }
 
+// FR-JOBS-16
 func TestMigrateIsIdempotentAndConcurrent(t *testing.T) {
 	pool := testPool(t)
 	schema := uniqueSchema(t, pool)
@@ -110,6 +114,7 @@ func TestMigrateIsIdempotentAndConcurrent(t *testing.T) {
 	}
 }
 
+// FR-JOBS-16
 func TestStoreRequiresMigration(t *testing.T) {
 	pool := testPool(t)
 	schema := uniqueSchema(t, pool)
@@ -122,6 +127,7 @@ func TestStoreRequiresMigration(t *testing.T) {
 	}
 }
 
+// FR-JOBS-16
 func TestJobRoundTripPreservesRepresentation(t *testing.T) {
 	store := newStore(t)
 	ctx := context.Background()
@@ -161,6 +167,7 @@ func TestJobRoundTripPreservesRepresentation(t *testing.T) {
 	}
 }
 
+// FR-JOBS-16
 func TestCreateRejectsTextPostgresCannotStore(t *testing.T) {
 	store := newStore(t)
 	for _, job := range []jobs.Job{
@@ -174,6 +181,7 @@ func TestCreateRejectsTextPostgresCannotStore(t *testing.T) {
 	}
 }
 
+// FR-JOBS-16, NFR-JOBS-01
 func TestConcurrentClaimersAcrossPoolsNeverDoubleClaim(t *testing.T) {
 	pool := testPool(t)
 	schema := uniqueSchema(t, pool)
@@ -260,6 +268,7 @@ func TestConcurrentClaimersAcrossPoolsNeverDoubleClaim(t *testing.T) {
 	}
 }
 
+// FR-JOBS-16
 func TestClaimSkipsRowsLockedByConcurrentTransactions(t *testing.T) {
 	pool := testPool(t)
 	schema := uniqueSchema(t, pool)
@@ -293,6 +302,7 @@ func TestClaimSkipsRowsLockedByConcurrentTransactions(t *testing.T) {
 	}
 }
 
+// FR-JOBS-10
 func TestDependencyFailurePropagatesAcrossWideFanOut(t *testing.T) {
 	store := newStore(t)
 	ctx := context.Background()

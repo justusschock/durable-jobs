@@ -14,6 +14,7 @@ import (
 
 var _ reconciliation.Adapter[jobs.RecoverySpec, jobs.RecoveryObserved, jobs.RecoveryAction, jobs.RecoveryAction] = jobs.RecoveryAdapter{}
 
+// FR-JOBS-08
 func TestRecoveryObserveUsesUTCNowAndUnboundedRecoveryList(t *testing.T) {
 	t.Parallel()
 
@@ -46,6 +47,7 @@ func TestRecoveryObserveUsesUTCNowAndUnboundedRecoveryList(t *testing.T) {
 	}
 }
 
+// FR-JOBS-08
 func TestRecoveryPlanFiltersLimitsSortsAndCarriesObservedFence(t *testing.T) {
 	t.Parallel()
 
@@ -103,6 +105,7 @@ func TestRecoveryPlanFiltersLimitsSortsAndCarriesObservedFence(t *testing.T) {
 	}
 }
 
+// FR-JOBS-08
 func TestRecoveryPlanRejectsNonPositiveLimit(t *testing.T) {
 	t.Parallel()
 
@@ -131,6 +134,7 @@ func TestRecoveryPlanRejectsNonPositiveLimit(t *testing.T) {
 	}
 }
 
+// FR-JOBS-08
 func TestRecoveryApplySendsExactRecoverAttemptRequest(t *testing.T) {
 	t.Parallel()
 
@@ -166,6 +170,7 @@ func TestRecoveryApplySendsExactRecoverAttemptRequest(t *testing.T) {
 	}
 }
 
+// FR-JOBS-08
 func TestRecoveryApplyTreatsObsoleteActionsAsIdempotentSuccess(t *testing.T) {
 	t.Parallel()
 
@@ -189,6 +194,7 @@ func TestRecoveryApplyTreatsObsoleteActionsAsIdempotentSuccess(t *testing.T) {
 	}
 }
 
+// FR-JOBS-08
 func TestRecoveryUndoIsNoOp(t *testing.T) {
 	t.Parallel()
 
@@ -201,6 +207,7 @@ func TestRecoveryUndoIsNoOp(t *testing.T) {
 	}
 }
 
+// FR-JOBS-14
 func TestNewRecoveryEngineRejectsNilDependenciesAndReturnsFourTypeEngine(t *testing.T) {
 	t.Parallel()
 

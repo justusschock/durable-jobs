@@ -17,6 +17,7 @@ import (
 
 const workerTestTimeout = 500 * time.Millisecond
 
+// FR-JOBS-14
 func TestWorkerConstructorRejectsNilAndInvalidOptions(t *testing.T) {
 	t.Parallel()
 
@@ -69,6 +70,7 @@ func TestWorkerConstructorRejectsNilAndInvalidOptions(t *testing.T) {
 	}
 }
 
+// FR-JOBS-13
 func TestWorkerRunOneReturnsFalseWhenNoJobIsReady(t *testing.T) {
 	t.Parallel()
 
@@ -105,6 +107,7 @@ func TestWorkerRunOneReturnsFalseWhenNoJobIsReady(t *testing.T) {
 	}
 }
 
+// FR-JOBS-13
 func TestWorkerRunOneUsesQueueOrderAndExecutesAtMostOneJob(t *testing.T) {
 	t.Parallel()
 
@@ -152,6 +155,7 @@ func TestWorkerRunOneUsesQueueOrderAndExecutesAtMostOneJob(t *testing.T) {
 	})
 }
 
+// FR-JOBS-13
 func TestWorkerRunOneRejectsCanceledContextBeforeClaiming(t *testing.T) {
 	t.Parallel()
 
@@ -183,6 +187,7 @@ func TestWorkerRunOneRejectsCanceledContextBeforeClaiming(t *testing.T) {
 	}
 }
 
+// FR-JOBS-06
 func TestWorkerRunOneHandlesSuccessErrorAndPanic(t *testing.T) {
 	t.Parallel()
 
@@ -257,6 +262,7 @@ func TestWorkerRunOneHandlesSuccessErrorAndPanic(t *testing.T) {
 	}
 }
 
+// FR-JOBS-05
 func TestWorkerRunOneHeartbeatsAndReleasesExecutionLease(t *testing.T) {
 	t.Parallel()
 
@@ -297,6 +303,7 @@ func TestWorkerRunOneHeartbeatsAndReleasesExecutionLease(t *testing.T) {
 	})
 }
 
+// FR-JOBS-05
 func TestWorkerRunOneReportsClaimWhenExecutionAborts(t *testing.T) {
 	t.Parallel()
 
@@ -362,6 +369,7 @@ func TestWorkerRunOneReportsClaimWhenExecutionAborts(t *testing.T) {
 	}
 }
 
+// FR-JOBS-13
 func TestWorkerRunOneReportsClaimAfterPostClaimError(t *testing.T) {
 	t.Parallel()
 
@@ -429,6 +437,7 @@ func TestWorkerRunOneReportsClaimAfterPostClaimError(t *testing.T) {
 	}
 }
 
+// FR-JOBS-05, FR-JOBS-12
 func TestWorkerSuccessfulHandlerCompletesWithClaimFenceAndReleasesQueueLease(t *testing.T) {
 	t.Parallel()
 
@@ -482,6 +491,7 @@ func TestWorkerSuccessfulHandlerCompletesWithClaimFenceAndReleasesQueueLease(t *
 	})
 }
 
+// FR-JOBS-05
 func TestWorkerLeaseDoneCancelsBlockedHandlerWithoutTerminalTransition(t *testing.T) {
 	t.Parallel()
 
@@ -515,6 +525,7 @@ func TestWorkerLeaseDoneCancelsBlockedHandlerWithoutTerminalTransition(t *testin
 	})
 }
 
+// FR-JOBS-07
 func TestWorkerCancellationPollingCancelsHandler(t *testing.T) {
 	t.Parallel()
 
@@ -554,6 +565,7 @@ func TestWorkerCancellationPollingCancelsHandler(t *testing.T) {
 	})
 }
 
+// FR-JOBS-06
 func TestWorkerHandlerErrorSchedulesRetryWithBoundedDelay(t *testing.T) {
 	t.Parallel()
 
@@ -586,6 +598,7 @@ func TestWorkerHandlerErrorSchedulesRetryWithBoundedDelay(t *testing.T) {
 	})
 }
 
+// FR-JOBS-06
 func TestWorkerPanicRecordsNonRetryableHandlerPanicFailure(t *testing.T) {
 	t.Parallel()
 
@@ -616,6 +629,7 @@ func TestWorkerPanicRecordsNonRetryableHandlerPanicFailure(t *testing.T) {
 	})
 }
 
+// FR-JOBS-07, FR-JOBS-12
 func TestWorkerSuccessfulHandlerPublishesCanceledWhenCompleteReturnsCanceled(t *testing.T) {
 	t.Parallel()
 
@@ -642,6 +656,7 @@ func TestWorkerSuccessfulHandlerPublishesCanceledWhenCompleteReturnsCanceled(t *
 	})
 }
 
+// NFR-JOBS-01
 func TestWorkerConcurrentRunsDoNotDoubleExecute(t *testing.T) {
 	t.Parallel()
 

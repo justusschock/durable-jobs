@@ -19,6 +19,7 @@ import (
 func Run(t *testing.T, factory func(t *testing.T) jobs.Store) {
 	t.Helper()
 
+	// FR-JOBS-02
 	t.Run("create is idempotently rejected", func(t *testing.T) {
 		store := factory(t)
 		job := newJob("create", "queue", now(0))
@@ -53,6 +54,7 @@ func Run(t *testing.T, factory func(t *testing.T) jobs.Store) {
 		}
 	})
 
+	// FR-JOBS-03
 	t.Run("claim follows deterministic order", func(t *testing.T) {
 		store := factory(t)
 		for _, job := range []jobs.Job{
@@ -81,6 +83,7 @@ func Run(t *testing.T, factory func(t *testing.T) jobs.Store) {
 		}
 	})
 
+	// FR-JOBS-18
 	t.Run("list jobs filters orders bounds and clones", func(t *testing.T) {
 		store := factory(t)
 		create(t, store, newJob("old", "queue", now(0)))
@@ -125,6 +128,7 @@ func Run(t *testing.T, factory func(t *testing.T) jobs.Store) {
 		}
 	})
 
+	// FR-JOBS-04
 	t.Run("heartbeat requires current fence", func(t *testing.T) {
 		store := factory(t)
 		create(t, store, newJob("heartbeat", "queue", now(0)))
@@ -149,6 +153,7 @@ func Run(t *testing.T, factory func(t *testing.T) jobs.Store) {
 		}
 	})
 
+	// FR-JOBS-04
 	t.Run("heartbeat deadline never moves backward", func(t *testing.T) {
 		store := factory(t)
 		create(t, store, newJob("heartbeat-order", "queue", now(0)))
@@ -184,6 +189,7 @@ func Run(t *testing.T, factory func(t *testing.T) jobs.Store) {
 		}
 	})
 
+	// FR-JOBS-04
 	t.Run("updated at never moves backward", func(t *testing.T) {
 		store := factory(t)
 		create(t, store, newJob("updated-at", "queue", now(0)))
@@ -257,6 +263,7 @@ func Run(t *testing.T, factory func(t *testing.T) jobs.Store) {
 		}
 	})
 
+	// FR-JOBS-06
 	t.Run("retry returns to pending", func(t *testing.T) {
 		store := factory(t)
 		create(t, store, newJob("retry", "queue", now(0)))
@@ -281,6 +288,7 @@ func Run(t *testing.T, factory func(t *testing.T) jobs.Store) {
 		}
 	})
 
+	// FR-JOBS-07
 	t.Run("cancel pending", func(t *testing.T) {
 		store := factory(t)
 		create(t, store, newJob("cancel-pending", "queue", now(0)))
@@ -296,6 +304,7 @@ func Run(t *testing.T, factory func(t *testing.T) jobs.Store) {
 		}
 	})
 
+	// FR-JOBS-07
 	t.Run("request cancel running", func(t *testing.T) {
 		store := factory(t)
 		create(t, store, newJob("cancel-running", "queue", now(0)))
@@ -318,6 +327,7 @@ func Run(t *testing.T, factory func(t *testing.T) jobs.Store) {
 		}
 	})
 
+	// FR-JOBS-08
 	t.Run("expired attempt recovery", func(t *testing.T) {
 		store := factory(t)
 		create(t, store, newJob("expired", "queue", now(0)))
@@ -353,6 +363,7 @@ func Run(t *testing.T, factory func(t *testing.T) jobs.Store) {
 		}
 	})
 
+	// FR-JOBS-08
 	t.Run("recovery before expiry", func(t *testing.T) {
 		store := factory(t)
 		create(t, store, newJob("recover-early", "queue", now(0)))
@@ -370,6 +381,7 @@ func Run(t *testing.T, factory func(t *testing.T) jobs.Store) {
 		}
 	})
 
+	// FR-JOBS-08
 	t.Run("recovery requires current fence", func(t *testing.T) {
 		store := factory(t)
 		create(t, store, newJob("recover-fence", "queue", now(0)))
@@ -387,6 +399,7 @@ func Run(t *testing.T, factory func(t *testing.T) jobs.Store) {
 		}
 	})
 
+	// FR-JOBS-08
 	t.Run("heartbeat invalidates listed recovery", func(t *testing.T) {
 		store := factory(t)
 		create(t, store, newJob("recover-heartbeat", "queue", now(0)))
@@ -416,6 +429,7 @@ func Run(t *testing.T, factory func(t *testing.T) jobs.Store) {
 		}
 	})
 
+	// FR-JOBS-10
 	t.Run("dependencies gate readiness", func(t *testing.T) {
 		store := factory(t)
 		dependency := newJob("dependency", "queue", now(0))
@@ -438,6 +452,7 @@ func Run(t *testing.T, factory func(t *testing.T) jobs.Store) {
 		}
 	})
 
+	// FR-JOBS-10
 	t.Run("terminal dependency failure propagates", func(t *testing.T) {
 		store := factory(t)
 		parent := newJob("parent", "queue", now(0))
@@ -471,6 +486,7 @@ func Run(t *testing.T, factory func(t *testing.T) jobs.Store) {
 		}
 	})
 
+	// FR-JOBS-10
 	t.Run("terminal dependency cancellation propagates", func(t *testing.T) {
 		store := factory(t)
 		parent := newJob("cancel-parent", "queue", now(0))

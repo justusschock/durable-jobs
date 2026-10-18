@@ -62,8 +62,9 @@ func TestWorkerRunPollsOncePerPollIntervalInVirtualTime(t *testing.T) {
 	})
 }
 
-// FR-JOBS-06: a retryable handler error is retried after the bounded
-// exponential backoff of the job's RetryPolicy, until an attempt succeeds.
+// FR-JOBS-06, FR-JOBS-12: a retryable handler error is retried after the
+// bounded exponential backoff of the job's RetryPolicy, until an attempt
+// succeeds, and each retry publishes a retry_scheduled event.
 func TestWorkerRunRetriesWithExponentialBackoffInVirtualTime(t *testing.T) {
 	t.Parallel()
 

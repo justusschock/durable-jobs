@@ -9,6 +9,7 @@ import (
 	jobs "github.com/justusschock/go-durable-jobs"
 )
 
+// FR-JOBS-19
 func TestSplitTimeRoundTripsNanoseconds(t *testing.T) {
 	for _, value := range []time.Time{
 		{},
@@ -70,6 +71,7 @@ func TestStateConstantsMatchSchemaLiterals(t *testing.T) {
 	}
 }
 
+// FR-JOBS-16
 func TestLoadMigrationsAreOrderedAndVersioned(t *testing.T) {
 	migrations, err := loadMigrations()
 	if err != nil {

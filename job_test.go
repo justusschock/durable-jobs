@@ -11,6 +11,7 @@ import (
 	jobs "github.com/justusschock/go-durable-jobs"
 )
 
+// FR-JOBS-01
 func TestValidateEnqueue(t *testing.T) {
 	t.Parallel()
 
@@ -66,6 +67,7 @@ func TestValidateEnqueueDoesNotMutateDependencies(t *testing.T) {
 	}
 }
 
+// FR-JOBS-02
 func TestJobAndRequestClonesOwnNestedState(t *testing.T) {
 	t.Parallel()
 
@@ -104,6 +106,7 @@ func TestJobAndRequestClonesOwnNestedState(t *testing.T) {
 	}
 }
 
+// FR-JOBS-02
 func TestClonesPreserveNilState(t *testing.T) {
 	t.Parallel()
 
@@ -117,6 +120,7 @@ func TestClonesPreserveNilState(t *testing.T) {
 	}
 }
 
+// NFR-JOBS-02
 func TestJobErrorsDoNotContainPayloads(t *testing.T) {
 	t.Parallel()
 

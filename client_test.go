@@ -15,6 +15,7 @@ import (
 
 var _ jobs.Client = (*jobs.DurableClient)(nil)
 
+// FR-JOBS-14
 func TestClientConstructorRejectsNilDependencies(t *testing.T) {
 	t.Parallel()
 
@@ -84,6 +85,7 @@ func TestClientConstructorRejectsNilDependencies(t *testing.T) {
 	}
 }
 
+// FR-JOBS-01
 func TestClientEnqueuePersistsBeforePublishing(t *testing.T) {
 	t.Parallel()
 
@@ -135,6 +137,7 @@ func TestClientEnqueuePersistsBeforePublishing(t *testing.T) {
 	}
 }
 
+// FR-JOBS-01
 func TestClientEnqueueValidatesBeforeCreateAndPublish(t *testing.T) {
 	t.Parallel()
 
@@ -162,6 +165,7 @@ func TestClientEnqueueValidatesBeforeCreateAndPublish(t *testing.T) {
 	}
 }
 
+// FR-JOBS-02
 func TestClientEnqueueNormalizesAvailableAtAndOwnsResources(t *testing.T) {
 	t.Parallel()
 
@@ -216,6 +220,7 @@ func TestClientEnqueueNormalizesAvailableAtAndOwnsResources(t *testing.T) {
 	}
 }
 
+// FR-JOBS-01
 func TestClientEnqueuePublishFailureLeavesDurableJob(t *testing.T) {
 	t.Parallel()
 
@@ -245,6 +250,7 @@ func TestClientEnqueuePublishFailureLeavesDurableJob(t *testing.T) {
 	}
 }
 
+// FR-JOBS-07
 func TestClientCancelPendingAndRunning(t *testing.T) {
 	t.Parallel()
 
