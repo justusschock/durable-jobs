@@ -1,0 +1,18 @@
+version: "2"
+
+linters:
+  # The standard set (errcheck, govet, ineffassign, staticcheck, unused) plus
+  # linters for error wrapping and spelling.
+  default: standard
+  enable:
+    - errorlint
+    - misspell
+  # bodyclose is not enabled: no package performs HTTP I/O.
+  settings:
+    misspell:
+      locale: US
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

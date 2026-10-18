@@ -52,7 +52,7 @@ func TestMapErrorClassifiesTextEncodingRejections(t *testing.T) {
 		}
 	}
 	other := &pgconn.PgError{Code: "23505"}
-	if err := mapError(other); err != other {
+	if err := mapError(other); err != other { //nolint:errorlint // mapError must return other errors unchanged, so this checks identity.
 		t.Fatalf("mapError(23505) = %v, want unchanged error", err)
 	}
 }

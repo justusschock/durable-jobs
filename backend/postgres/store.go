@@ -97,7 +97,7 @@ func mapError(err error) error {
 	if errors.As(err, &pgErr) {
 		switch pgErr.Code {
 		case "22021", "22P05": // character_not_in_repertoire, untranslatable_character
-			return fmt.Errorf("%w: %v", jobs.ErrInvalidJob, err)
+			return fmt.Errorf("%w: %w", jobs.ErrInvalidJob, err)
 		}
 	}
 	return err

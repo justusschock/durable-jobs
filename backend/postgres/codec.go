@@ -32,7 +32,7 @@ func formatUint(value uint64) string { return strconv.FormatUint(value, 10) }
 func parseUint(value string) (uint64, error) {
 	parsed, err := strconv.ParseUint(value, 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("%w: %v", ErrUnsupportedFormat, err)
+		return 0, fmt.Errorf("%w: %w", ErrUnsupportedFormat, err)
 	}
 	return parsed, nil
 }
@@ -158,13 +158,13 @@ func scanJob(row pgx.Row) (jobs.Job, error) {
 	}
 	if headers != nil {
 		if err := json.Unmarshal([]byte(*headers), &job.Headers); err != nil {
-			return jobs.Job{}, fmt.Errorf("%w: headers: %v", ErrUnsupportedFormat, err)
+			return jobs.Job{}, fmt.Errorf("%w: headers: %w", ErrUnsupportedFormat, err)
 		}
 	}
 	if failure != nil {
 		job.LastFailure = &jobs.Failure{}
 		if err := json.Unmarshal([]byte(*failure), job.LastFailure); err != nil {
-			return jobs.Job{}, fmt.Errorf("%w: last failure: %v", ErrUnsupportedFormat, err)
+			return jobs.Job{}, fmt.Errorf("%w: last failure: %w", ErrUnsupportedFormat, err)
 		}
 	}
 	if dependsOn != nil {
@@ -217,7 +217,7 @@ func scanAttempt(row pgx.Row) (jobs.Attempt, error) {
 		StartedAt: joinTime(startedAt, startedAtNsec), HeartbeatDeadline: joinTime(deadline, deadlineNsec),
 	}
 	if err := json.Unmarshal([]byte(snapshot), &attempt.Job); err != nil {
-		return jobs.Attempt{}, fmt.Errorf("%w: attempt job snapshot: %v", ErrUnsupportedFormat, err)
+		return jobs.Attempt{}, fmt.Errorf("%w: attempt job snapshot: %w", ErrUnsupportedFormat, err)
 	}
 	if attempt.Job.ID != jobs.JobID(jobID) {
 		return jobs.Attempt{}, fmt.Errorf("%w: attempt job snapshot does not match job ID", ErrUnsupportedFormat)
@@ -264,7 +264,7 @@ func scanSchedule(row pgx.Row) (jobs.Schedule, error) {
 		ID: jobs.ScheduleID(id), NextRunAt: joinTime(nextRunAt, nextRunAtNsec), Interval: time.Duration(interval), Enabled: enabled,
 	}
 	if err := json.Unmarshal([]byte(request), &schedule.Request); err != nil {
-		return jobs.Schedule{}, fmt.Errorf("%w: schedule request: %v", ErrUnsupportedFormat, err)
+		return jobs.Schedule{}, fmt.Errorf("%w: schedule request: %w", ErrUnsupportedFormat, err)
 	}
 	parsed, err := parseUint(revision)
 	if err != nil {
